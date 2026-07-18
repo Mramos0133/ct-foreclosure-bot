@@ -1,0 +1,66 @@
+"""Shared data structures passed between pipeline stages."""
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class CaseListing:
+    """One row from a Property Address Search results grid."""
+    city_town: str
+    street_address: str
+    zip_code: str
+    case_type: str
+    case_name: str
+    docket_no: str
+    property_type: str
+    disposition: str
+    search_town: str  # the town query that produced this row
+
+
+@dataclass
+class DocketEntry:
+    entry_no: str
+    file_date: str
+    filed_by: str
+    description: str
+    arguable: str
+    document_url: str | None = None
+
+
+@dataclass
+class DocketInfo:
+    docket_no: str
+    case_caption: str
+    case_detail_url: str
+    entries: list[DocketEntry] = field(default_factory=list)
+
+
+@dataclass
+class WorksheetFields:
+    document_no: str
+    document_url: str
+    updated_debt: float | None = None
+    total_debt_plus_prior_encumbrances: float | None = None
+    encumbrances_subsequent_to_lien: float | None = None
+    attorney_fees_raw: str | None = None
+    appraisal_fee: float | None = None
+    title_search_fee: float | None = None
+    ocr_validated: bool = False
+    ocr_warning: str | None = None
+    raw_lines: dict = field(default_factory=dict)
+
+
+@dataclass
+class CaseResult:
+    town: str
+    docket_no: str
+    case_caption: str
+    motion_types_found: list[str]
+    total_debt: float | None
+    encumbrances_subsequent_itemized: str
+    attorney_fees: str | None
+    default_failure_to_appear: bool
+    bankruptcy_stay_reopened: bool
+    bankruptcy_supporting_text: str
+    case_detail_url: str
+    worksheet_doc_url: str | None

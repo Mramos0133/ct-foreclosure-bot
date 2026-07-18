@@ -1,0 +1,5 @@
+playwright>=1.40
+beautifulsoup4>=4.12
+pymupdf>=1.23
+pytesseract>=0.3.10
+Pillow>=10.0
