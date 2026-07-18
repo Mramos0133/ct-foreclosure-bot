@@ -132,6 +132,17 @@ async def run_pipeline(
                     result_writer.write(result, worksheet)
                     matched_count += 1
                     log.info("MATCH  %s  %s  motions=%s", town, row.docket_no, result.motion_types_found)
+                    if worksheet is not None and not worksheet.ocr_validated:
+                        # Not an exception -- the case processed fine, but the
+                        # worksheet OCR extraction is low-confidence (e.g. a
+                        # cross-field mismatch, or a value that couldn't be
+                        # located at all). Route it to the same review queue
+                        # as hard failures, since it needs the same kind of
+                        # human look before the numbers are trusted.
+                        review_writer.write(
+                            datetime.now(timezone.utc).isoformat(), town, row.docket_no,
+                            f"OCR not validated: {worksheet.ocr_warning}",
+                        )
 
                 checkpoint.mark_docket_processed(row.docket_no, town, matched=result is not None, status="ok")
 

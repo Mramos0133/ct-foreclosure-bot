@@ -70,7 +70,11 @@ LINE_LABELS = {
     "updated_debt": r"Updated\s+debt",
     "condo_fees": r"Condominium\s+Common\s+Charges",
     "other_prior_encumbrances": r"encumbrances\s+on\s+the\s+property\s+prior",
-    "total_debt_plus_prior_encumbrances": r"Total\s+debt\s*(?:plus\s+encumbrances\s+prior[^:]*)?:",
+    # "Total debt:", "Total debt plus encumbrances prior ... :", and
+    # "Total debt as of <date> ... :" have all been observed on real
+    # filings -- match on the "Total debt" line generically (up to the
+    # colon) rather than requiring specific continuation wording.
+    "total_debt_plus_prior_encumbrances": r"Total\s+debt[^:]{0,80}:",
     "equity": r"Equity[:\s]*\(Subtract",
     "encumbrances_subsequent_to_lien": r"encumbrances\s+subsequent\s+to\s+(?:the\s+)?plaintiff",
     "attorney_fees": r"Attorney.?s\s+fees",
@@ -294,7 +298,15 @@ def extract_worksheet_fields(document_no: str, document_url: str, pdf_bytes: byt
         else:
             fields.ocr_validated = True
     else:
-        fields.ocr_warning = "could not locate 'Updated debt' and/or 'Total debt' lines via OCR"
+        missing = []
+        if fields.updated_debt is None:
+            missing.append("'Updated debt' (line 2)")
+        if fields.total_debt_plus_prior_encumbrances is None:
+            missing.append("'Total debt' (line 5)")
+        fields.ocr_warning = (
+            f"could not locate a value for {' and '.join(missing)} via OCR "
+            "-- may be genuinely blank in the source document, needs manual review"
+        )
 
     return fields
 
