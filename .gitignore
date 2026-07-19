@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 *.sqlite3
 *.csv
+*.xlsx
 .venv/
 venv/
