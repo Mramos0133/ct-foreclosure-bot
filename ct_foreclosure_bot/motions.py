@@ -13,11 +13,23 @@ import re
 # A case counts as a match if ANY of these fire on ANY docket entry.
 # Each is (label, compiled regex). Regexes are matched against the
 # uppercased, whitespace-normalized entry description.
+#
+# "Law Day" and "Motion to Open Judgment" were added on top of the original
+# two judgment motions per explicit request, to widen the net: a case can
+# carry a Law Day (strict foreclosure) or a Motion to Open Judgment
+# (typically a case being reopened/continued) without necessarily also
+# having the exact original motion-title wording matched above -- e.g. a
+# docket entry like "MOTION TO RESET LAW DAYS AFTER FILING OF A BANKRUPTCY
+# PETITION" carries "LAW DAY" but wouldn't match either pattern above.
 TARGET_MOTION_PATTERNS = [
     ("Motion for Judgment of Strict Foreclosure",
      re.compile(r"MOTION\s+FOR\s+JUDGMENT.{0,20}STRICT\s+FORECLOSURE")),
     ("Motion for Judgment of Foreclosure by Sale",
      re.compile(r"MOTION\s+FOR\s+JUDGMENT.{0,20}FORECLOSURE\s+BY\s+SALE")),
+    ("Law Day",
+     re.compile(r"LAW\s+DAYS?")),
+    ("Motion to Open Judgment",
+     re.compile(r"MOTION\s+TO\s+OPEN\s+JUDGMENT")),
 ]
 
 DEFAULT_FAILURE_TO_APPEAR_PATTERN = re.compile(
