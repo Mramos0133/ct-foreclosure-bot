@@ -21,6 +21,7 @@ from playwright.async_api import async_playwright
 
 from .browser import launch_browser, new_context
 from .checkpoint import Checkpoint
+from .excel_export import export_to_xlsx
 from .output import ResultWriter, ReviewWriter
 from .pipeline import run_pipeline
 from .search import open_search_form  # noqa: F401 (kept for potential future warmup use)
@@ -47,6 +48,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default="ct_foreclosure_results.csv", help="Output CSV path (appended to; safe to resume into the same file).")
     p.add_argument("--review-log", default="needs_manual_review.csv", help="CSV of dockets that errored during processing.")
     p.add_argument("--checkpoint-db", default="ct_foreclosure_checkpoint.sqlite3", help="SQLite checkpoint file; reuse the same path to resume a run.")
+    p.add_argument("--export-xlsx", default="ct_foreclosure_leads.xlsx", help="Ranked, multi-sheet (HOT/WARM/COLD/UNCLASSIFIED) Excel workbook, (re)written at the end of every run from the checkpoint's full case data. Pass '' to skip.")
+    p.add_argument("--export-only", action="store_true", help="Skip crawling entirely; just (re)build --export-xlsx from the existing --checkpoint-db. Useful to refresh the ranked workbook without hitting the site again.")
     p.add_argument("--headed", action="store_true", help="Run the browser headed (debugging only).")
     p.add_argument("--proxy", default=None, help="Explicit proxy server (defaults to HTTPS_PROXY env var if set).")
     p.add_argument("--disable-tls12-workaround", action="store_true", help="Disable forcing Chromium to TLS 1.2 max. Only useful if you are NOT behind a TLS-intercepting proxy that mishandles TLS 1.3, and you need TLS 1.3.")
@@ -65,6 +68,19 @@ async def _main_async(args: argparse.Namespace) -> None:
 
     if args.min_delay < 2.0:
         raise SystemExit("--min-delay must be >= 2.0 seconds; this site's robots.txt disallows automated access entirely, so conservative pacing is a hard requirement, not a default to lower.")
+
+    if args.export_only:
+        checkpoint = Checkpoint(args.checkpoint_db)
+        try:
+            if args.export_xlsx:
+                counts = export_to_xlsx(checkpoint.all_case_results(), args.export_xlsx)
+                logging.getLogger("ct_foreclosure_bot").info(
+                    "exported %s: HOT=%d WARM=%d COLD=%d UNCLASSIFIED=%d",
+                    args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"], counts["UNCLASSIFIED"],
+                )
+        finally:
+            checkpoint.close()
+        return
 
     towns = [args.town] if args.town else list(CT_TOWNS)
 
@@ -101,6 +117,12 @@ async def _main_async(args: argparse.Namespace) -> None:
     finally:
         result_writer.close()
         review_writer.close()
+        if args.export_xlsx:
+            counts = export_to_xlsx(checkpoint.all_case_results(), args.export_xlsx)
+            logging.getLogger("ct_foreclosure_bot").info(
+                "exported %s: HOT=%d WARM=%d COLD=%d UNCLASSIFIED=%d",
+                args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"], counts["UNCLASSIFIED"],
+            )
         checkpoint.close()
 
 

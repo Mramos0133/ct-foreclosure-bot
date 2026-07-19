@@ -11,14 +11,22 @@ marked complete once every result page has been walked without hitting
 
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from playwright.async_api import Page, BrowserContext
 
+from .auction_site import normalize_docket
 from .case_analysis import analyze_docket
 from .checkpoint import Checkpoint
 from .docket import fetch_docket
+from .lead_ranking import (
+    classify_case, decide_bucket, finalize_key_date,
+    finalize_judgment_granted, finalize_bankruptcy_chapter,
+)
 from .models import CaseResult
+from .order_document import (
+    fetch_document_text, extract_key_date, extract_bankruptcy_chapter, is_order_granted,
+)
 from .output import ResultWriter, ReviewWriter
 from .search import iter_town_cases
 from .throttle import Throttle
@@ -36,12 +44,17 @@ async def process_case(
     throttle: Throttle,
     town: str,
     docket_no: str,
+    auction_listing: dict[str, date],
 ) -> tuple[CaseResult | None, object | None]:
     """Fetch + analyze one docket. Returns (CaseResult or None, WorksheetFields or None).
 
     Returns (None, None) for a case that doesn't match either target motion
     -- that is not an error, just a non-match, and the caller still
     checkpoints it so it is not re-fetched on resume.
+
+    `auction_listing` is the statewide pending-sale listing fetched once
+    per run (see auction_site.py) -- passed in rather than fetched here so
+    it's only ever pulled once, not once per case.
     """
     docket = await fetch_docket(context, throttle, docket_no)
     analysis = analyze_docket(docket)
@@ -73,6 +86,55 @@ async def process_case(
     else:
         encumbrances_display = "no Foreclosure Worksheet found in docket"
 
+    on_auction_site = None
+    normalized = normalize_docket(docket.docket_no)
+    if normalized in auction_listing:
+        on_auction_site = True
+    elif any("FORECLOSURE BY SALE" in m.upper() for m in analysis.motion_types_found):
+        # Only meaningful for by-sale cases -- strict foreclosure has no
+        # auction at all, so "not found in the listing" isn't a signal for it.
+        on_auction_site = False
+
+    today = date.today()
+    ranking = classify_case(docket, analysis, on_auction_site, today)
+
+    # Only fetch/OCR the Order document (and, for WARM cases, the
+    # bankruptcy motion) when there's actually a date/chapter to find --
+    # these are additional network requests per case, so skip them when
+    # classify_case() already determined there's no relevant order entry.
+    if ranking.order_entry_for_key_date is not None:
+        try:
+            order_text = await fetch_document_text(
+                context, throttle, ranking.order_entry_for_key_date.document_url
+            )
+            key_date, label = extract_key_date(order_text)
+            finalize_key_date(ranking, key_date, label, today)
+            # The Order document's own text is the authoritative source for
+            # whether the motion was actually granted -- the docket entry's
+            # own RESULT text is not reliable for this (confirmed on a real
+            # filing: "RESULT: Order 2/17/2026 HON ..." carries no
+            # grant/deny word at all, unlike the more common "RESULT:
+            # Granted ..." phrasing), so this overrides classify_case()'s
+            # preliminary guess and the bucket is re-decided below.
+            finalize_judgment_granted(ranking, is_order_granted(order_text))
+            if ranking.order_entry_for_bankruptcy is None and analysis.bankruptcy_stay_reopened:
+                chapter = extract_bankruptcy_chapter(order_text)
+                if chapter:
+                    finalize_bankruptcy_chapter(ranking, chapter)
+        except Exception:  # noqa: BLE001 -- a failed order-doc fetch shouldn't sink the whole case
+            log.exception("failed fetching order document for %s", docket_no)
+
+    if ranking.bankruptcy_chapter is None and ranking.order_entry_for_bankruptcy is not None:
+        try:
+            bk_text = await fetch_document_text(
+                context, throttle, ranking.order_entry_for_bankruptcy.document_url
+            )
+            finalize_bankruptcy_chapter(ranking, extract_bankruptcy_chapter(bk_text))
+        except Exception:  # noqa: BLE001
+            log.exception("failed fetching bankruptcy document for %s", docket_no)
+
+    decide_bucket(ranking, analysis.bankruptcy_stay_reopened)
+
     result = CaseResult(
         town=town,
         docket_no=docket.docket_no,
@@ -87,6 +149,16 @@ async def process_case(
         bankruptcy_supporting_text=analysis.bankruptcy_supporting_text,
         case_detail_url=docket.case_detail_url,
         worksheet_doc_url=worksheet_url,
+        lead_bucket=ranking.lead_bucket,
+        judgment_granted=ranking.judgment_granted,
+        non_appearing=ranking.non_appearing,
+        on_auction_site=ranking.on_auction_site,
+        key_date=ranking.key_date.isoformat() if ranking.key_date else None,
+        key_date_label=ranking.key_date_label,
+        days_to_key_date=ranking.days_to_key_date,
+        bankruptcy_chapter=ranking.bankruptcy_chapter,
+        continuance_count=ranking.continuance_count,
+        warm_cold_subflag=ranking.warm_cold_subflag,
     )
     return result, worksheet
 
@@ -102,8 +174,15 @@ async def run_pipeline(
     limit: int | None = None,
     case_status: str = "Active Cases",
     property_type: str = "All Properties",
+    auction_listing: dict | None = None,
 ) -> None:
     matched_count = 0
+
+    if auction_listing is None:
+        from .auction_site import fetch_statewide_auction_listing
+        log.info("fetching statewide pending-foreclosure-sale listing (for HOT/auction-site cross-check)...")
+        auction_listing = await fetch_statewide_auction_listing(context, throttle)
+        log.info("auction listing: %d pending sales found statewide", len(auction_listing))
 
     for town in towns:
         if checkpoint.is_town_completed(town):
@@ -124,7 +203,7 @@ async def run_pipeline(
                     continue
 
                 try:
-                    result, worksheet = await process_case(context, throttle, town, row.docket_no)
+                    result, worksheet = await process_case(context, throttle, town, row.docket_no, auction_listing)
                 except Exception as exc:  # noqa: BLE001 - one bad case must not kill the run
                     log.exception("failed processing docket %s", row.docket_no)
                     checkpoint.mark_docket_processed(row.docket_no, town, matched=False, status="error", error=str(exc))
@@ -133,8 +212,12 @@ async def run_pipeline(
 
                 if result is not None:
                     result_writer.write(result, worksheet)
+                    checkpoint.save_case_result(result)
                     matched_count += 1
-                    log.info("MATCH  %s  %s  motions=%s", town, row.docket_no, result.motion_types_found)
+                    log.info(
+                        "MATCH  %s  %s  bucket=%s  motions=%s",
+                        town, row.docket_no, result.lead_bucket, result.motion_types_found,
+                    )
                     if worksheet is not None and not worksheet.ocr_validated:
                         # Not an exception -- the case processed fine, but the
                         # worksheet OCR extraction is low-confidence (e.g. a

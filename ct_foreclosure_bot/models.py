@@ -66,3 +66,14 @@ class CaseResult:
     bankruptcy_supporting_text: str
     case_detail_url: str
     worksheet_doc_url: str | None
+    # Lead-ranking fields (see lead_ranking.py for how these are derived)
+    lead_bucket: str = "UNCLASSIFIED"  # "HOT" | "WARM" | "COLD" | "UNCLASSIFIED"
+    judgment_granted: bool = False
+    non_appearing: bool = False  # proxy: default_failure_to_appear
+    on_auction_site: bool | None = None  # None = not applicable (e.g. strict foreclosure has no auction)
+    key_date: str | None = None  # Law Day or Sale Date, ISO format, from the Order document
+    key_date_label: str | None = None  # "Law Day" | "Sale Date" | None
+    days_to_key_date: int | None = None
+    bankruptcy_chapter: str | None = None  # "7" | "13" | etc., WARM cases only
+    continuance_count: int = 0
+    warm_cold_subflag: bool = False  # COLD sub-segment: 3+ continuances, no bankruptcy, non-appearing

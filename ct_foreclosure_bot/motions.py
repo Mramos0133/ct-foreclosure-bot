@@ -69,3 +69,33 @@ def is_bankruptcy_mention(entry_text: str) -> bool:
 def is_reopen_after_bankruptcy(entry_text: str) -> bool:
     norm = normalize(entry_text)
     return any(p.search(norm) for p in REOPEN_AFTER_BANKRUPTCY_PATTERNS)
+
+
+# "MOTION TO OPEN JUDGMENT AND EXTEND THE SALE DATE" is the observed real
+# phrasing for a sale-date continuance (confirmed on a real docket, granted
+# and denied instances both seen). Matched loosely (EXTEND + SALE DATE
+# somewhere nearby) rather than the exact phrase, since law-day extensions
+# on strict foreclosure cases may be worded slightly differently.
+EXTEND_SALE_DATE_PATTERN = re.compile(r"EXTEND.{0,30}(SALE\s+DATE|LAW\s+DAY)")
+
+GRANTED_PATTERN = re.compile(r"\bGRANTED\b")
+
+# The document generated for a granted judgment motion is a separate docket
+# entry, always literally titled "ORDER" (see order_document.py) -- but its
+# numbering suffix relative to the motion entry is not consistent across
+# cases (".86", ".10", sometimes a ".20" correction of an earlier ".10"),
+# so it must be found by scanning nearby entries rather than assumed by a
+# fixed offset.
+ORDER_ENTRY_PATTERN = re.compile(r"^ORDER\b")
+
+
+def is_extend_sale_date_or_law_day(entry_text: str) -> bool:
+    return bool(EXTEND_SALE_DATE_PATTERN.search(normalize(entry_text)))
+
+
+def is_granted(entry_text: str) -> bool:
+    return bool(GRANTED_PATTERN.search(normalize(entry_text)))
+
+
+def is_order_entry(entry_text: str) -> bool:
+    return bool(ORDER_ENTRY_PATTERN.search(normalize(entry_text)))

@@ -15,6 +15,8 @@ immediately, so a kill -9 mid-run loses at most the in-flight request, not
 prior progress).
 """
 
+import dataclasses
+import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -33,6 +35,17 @@ CREATE TABLE IF NOT EXISTS processed_dockets (
 CREATE TABLE IF NOT EXISTS completed_towns (
     town         TEXT PRIMARY KEY,
     completed_at TEXT NOT NULL
+);
+
+-- Full structured CaseResult per match, stored as JSON. Kept separate from
+-- processed_dockets (which is just the resume/skip bookkeeping) so the
+-- lead-ranking export can query and re-sort every matched case's full
+-- data at any time without re-running the crawl.
+CREATE TABLE IF NOT EXISTS case_results (
+    docket_no    TEXT PRIMARY KEY,
+    lead_bucket  TEXT NOT NULL,
+    data         TEXT NOT NULL,  -- JSON-serialized CaseResult
+    saved_at     TEXT NOT NULL
 );
 """
 
@@ -89,6 +102,23 @@ class Checkpoint:
             "SELECT docket_no, town, error FROM processed_dockets WHERE status = 'error'"
         )
         return cur.fetchall()
+
+    def save_case_result(self, result) -> None:
+        """Store a full CaseResult (from models.py), keyed by docket_no."""
+        with closing(self._conn.cursor()) as cur:
+            cur.execute(
+                """INSERT OR REPLACE INTO case_results (docket_no, lead_bucket, data, saved_at)
+                   VALUES (?, ?, ?, ?)""",
+                (result.docket_no, result.lead_bucket, json.dumps(dataclasses.asdict(result)), _now()),
+            )
+        self._conn.commit()
+
+    def all_case_results(self):
+        """Return every stored CaseResult, reconstructed from JSON."""
+        from .models import CaseResult
+
+        cur = self._conn.execute("SELECT data FROM case_results")
+        return [CaseResult(**json.loads(row[0])) for row in cur.fetchall()]
 
     def stats(self) -> dict:
         total = self._conn.execute("SELECT COUNT(*) FROM processed_dockets").fetchone()[0]
