@@ -33,6 +33,7 @@ COLUMNS = [
     ("Total Debt", lambda r: f"{r.total_debt:.2f}" if r.total_debt is not None else ""),
     ("Appraised Value", lambda r: f"{r.appraised_value:.2f}" if r.appraised_value is not None else ""),
     ("Encumbrances Subsequent to Plaintiff's Lien", lambda r: r.encumbrances_subsequent_itemized),
+    ("Debt + Encumbrances / Appraised Value", lambda r: _short_sale_ratio_display(r)),
     ("Attorney Fees", lambda r: r.attorney_fees or ""),
     ("Motion for Default - Failure to Appear (Y/N)", lambda r: "Y" if r.default_failure_to_appear else "N"),
     ("Bankruptcy Stay + Reopened (Y/N)", lambda r: "Y" if r.bankruptcy_stay_reopened else "N"),
@@ -41,7 +42,18 @@ COLUMNS = [
     ("Foreclosure Worksheet Doc URL", lambda r: r.worksheet_doc_url or ""),
 ]
 
-SHEET_ORDER = ["HOT", "WARM", "COLD", "UNCLASSIFIED"]
+SHEET_ORDER = ["HOT", "WARM", "COLD", "POTENTIAL_SHORT_SALE", "UNCLASSIFIED"]
+
+
+def _short_sale_ratio(r: CaseResult) -> float | None:
+    if r.total_debt is None or r.appraised_value is None or r.appraised_value <= 0:
+        return None
+    return (r.total_debt + (r.encumbrances_subsequent_to_lien or 0)) / r.appraised_value
+
+
+def _short_sale_ratio_display(r: CaseResult) -> str:
+    ratio = _short_sale_ratio(r)
+    return f"{ratio:.1%}" if ratio is not None else ""
 
 
 def _sort_key_hot(r: CaseResult):
@@ -63,10 +75,18 @@ def _sort_key_unclassified(r: CaseResult):
     return (r.town, r.docket_no)
 
 
+def _sort_key_short_sale(r: CaseResult):
+    # Highest debt-to-value ratio first -- least equity cushion, most
+    # urgent to price as a short sale.
+    ratio = _short_sale_ratio(r)
+    return (ratio is None, -(ratio or 0))
+
+
 SORT_KEYS = {
     "HOT": _sort_key_hot,
     "WARM": _sort_key_warm,
     "COLD": _sort_key_cold,
+    "POTENTIAL_SHORT_SALE": _sort_key_short_sale,
     "UNCLASSIFIED": _sort_key_unclassified,
 }
 

@@ -60,6 +60,7 @@ class CaseResult:
     total_debt: float | None
     appraised_value: float | None
     encumbrances_subsequent_itemized: str
+    encumbrances_subsequent_to_lien: float | None
     attorney_fees: str | None
     default_failure_to_appear: bool
     bankruptcy_stay_reopened: bool
@@ -67,7 +68,7 @@ class CaseResult:
     case_detail_url: str
     worksheet_doc_url: str | None
     # Lead-ranking fields (see lead_ranking.py for how these are derived)
-    lead_bucket: str = "UNCLASSIFIED"  # "HOT" | "WARM" | "COLD" | "UNCLASSIFIED"
+    lead_bucket: str = "UNCLASSIFIED"  # "HOT" | "WARM" | "COLD" | "POTENTIAL_SHORT_SALE" | "UNCLASSIFIED"
     judgment_granted: bool = False
     non_appearing: bool = False  # proxy: default_failure_to_appear
     on_auction_site: bool | None = None  # None = not applicable (e.g. strict foreclosure has no auction)

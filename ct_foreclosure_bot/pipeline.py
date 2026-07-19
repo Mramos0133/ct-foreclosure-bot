@@ -64,6 +64,7 @@ async def process_case(
 
     worksheet = None
     encumbrances_display = ""
+    encumbrances_numeric = None
     total_debt = None
     appraised_value = None
     attorney_fees_display = None
@@ -76,6 +77,7 @@ async def process_case(
         total_debt = worksheet.updated_debt
         appraised_value = worksheet.appraised_value
         attorney_fees_display = worksheet.attorney_fees_raw
+        encumbrances_numeric = worksheet.encumbrances_subsequent_to_lien
         if worksheet.encumbrances_subsequent_to_lien is not None:
             # The worksheet only ever gives a lump-sum total for this line --
             # no per-holder itemization is present on the source document.
@@ -135,6 +137,18 @@ async def process_case(
 
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened)
 
+    # Short-sale override: total debt plus subsequent-lien encumbrances
+    # exceeding 85% of appraised value means there's little/no equity
+    # cushion left for a standard purchase -- moved to its own tab instead
+    # of wherever it would have otherwise landed (HOT/WARM/COLD/
+    # UNCLASSIFIED), per explicit request. Only evaluated when both figures
+    # are actually known; a missing appraised value (or one of zero) can't
+    # support a ratio.
+    if total_debt is not None and appraised_value is not None and appraised_value > 0:
+        short_sale_ratio = (total_debt + (encumbrances_numeric or 0)) / appraised_value
+        if short_sale_ratio > 0.85:
+            ranking.lead_bucket = "POTENTIAL_SHORT_SALE"
+
     result = CaseResult(
         town=town,
         docket_no=docket.docket_no,
@@ -143,6 +157,7 @@ async def process_case(
         total_debt=total_debt,
         appraised_value=appraised_value,
         encumbrances_subsequent_itemized=encumbrances_display,
+        encumbrances_subsequent_to_lien=encumbrances_numeric,
         attorney_fees=attorney_fees_display,
         default_failure_to_appear=analysis.default_failure_to_appear,
         bankruptcy_stay_reopened=analysis.bankruptcy_stay_reopened,

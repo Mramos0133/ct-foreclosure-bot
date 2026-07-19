@@ -48,7 +48,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", default="ct_foreclosure_results.csv", help="Output CSV path (appended to; safe to resume into the same file).")
     p.add_argument("--review-log", default="needs_manual_review.csv", help="CSV of dockets that errored during processing.")
     p.add_argument("--checkpoint-db", default="ct_foreclosure_checkpoint.sqlite3", help="SQLite checkpoint file; reuse the same path to resume a run.")
-    p.add_argument("--export-xlsx", default="ct_foreclosure_leads.xlsx", help="Ranked, multi-sheet (HOT/WARM/COLD/UNCLASSIFIED) Excel workbook, (re)written at the end of every run from the checkpoint's full case data. Pass '' to skip.")
+    p.add_argument("--export-xlsx", default="ct_foreclosure_leads.xlsx", help="Ranked, multi-sheet (HOT/WARM/COLD/POTENTIAL_SHORT_SALE/UNCLASSIFIED) Excel workbook, (re)written at the end of every run from the checkpoint's full case data. Pass '' to skip.")
     p.add_argument("--export-only", action="store_true", help="Skip crawling entirely; just (re)build --export-xlsx from the existing --checkpoint-db. Useful to refresh the ranked workbook without hitting the site again.")
     p.add_argument("--headed", action="store_true", help="Run the browser headed (debugging only).")
     p.add_argument("--proxy", default=None, help="Explicit proxy server (defaults to HTTPS_PROXY env var if set).")
@@ -75,8 +75,9 @@ async def _main_async(args: argparse.Namespace) -> None:
             if args.export_xlsx:
                 counts = export_to_xlsx(checkpoint.all_case_results(), args.export_xlsx)
                 logging.getLogger("ct_foreclosure_bot").info(
-                    "exported %s: HOT=%d WARM=%d COLD=%d UNCLASSIFIED=%d",
-                    args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"], counts["UNCLASSIFIED"],
+                    "exported %s: HOT=%d WARM=%d COLD=%d SHORT_SALE=%d UNCLASSIFIED=%d",
+                    args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"],
+                    counts["POTENTIAL_SHORT_SALE"], counts["UNCLASSIFIED"],
                 )
         finally:
             checkpoint.close()
@@ -120,8 +121,9 @@ async def _main_async(args: argparse.Namespace) -> None:
         if args.export_xlsx:
             counts = export_to_xlsx(checkpoint.all_case_results(), args.export_xlsx)
             logging.getLogger("ct_foreclosure_bot").info(
-                "exported %s: HOT=%d WARM=%d COLD=%d UNCLASSIFIED=%d",
-                args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"], counts["UNCLASSIFIED"],
+                "exported %s: HOT=%d WARM=%d COLD=%d SHORT_SALE=%d UNCLASSIFIED=%d",
+                args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"],
+                counts["POTENTIAL_SHORT_SALE"], counts["UNCLASSIFIED"],
             )
         checkpoint.close()
 
