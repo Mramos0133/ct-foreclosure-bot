@@ -42,7 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--town", help="Process a single CT town instead of all 169 (e.g. 'Hartford'). Useful for testing.")
     p.add_argument("--limit", type=int, default=None, help="Stop after this many MATCHED cases (across all towns processed this run). Useful for a quick test batch.")
-    p.add_argument("--case-status", default="All Cases", choices=["All Cases", "Active Cases", "Disposed Cases"])
+    p.add_argument("--case-status", default="Active Cases", choices=["All Cases", "Active Cases", "Disposed Cases"], help="Defaults to Active Cases only -- pass 'All Cases' or 'Disposed Cases' to widen it.")
     p.add_argument("--property-type", default="All Properties", choices=["All Properties", "Commercial Properties", "Residential Properties"])
     p.add_argument("--output", default="ct_foreclosure_results.csv", help="Output CSV path (appended to; safe to resume into the same file).")
     p.add_argument("--review-log", default="needs_manual_review.csv", help="CSV of dockets that errored during processing.")

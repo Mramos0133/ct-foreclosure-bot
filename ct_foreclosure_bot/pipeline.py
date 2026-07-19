@@ -97,7 +97,7 @@ async def run_pipeline(
     result_writer: ResultWriter,
     review_writer: ReviewWriter,
     limit: int | None = None,
-    case_status: str = "All Cases",
+    case_status: str = "Active Cases",
     property_type: str = "All Properties",
 ) -> None:
     matched_count = 0

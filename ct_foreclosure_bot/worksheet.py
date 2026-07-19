@@ -226,14 +226,17 @@ def _nearest_money(label_line: dict, money_lines: list[dict], max_distance: floa
     return best["money"]
 
 
+def _same_line_money(label_line: dict) -> str | None:
+    m = re.search(MONEY_RE, label_line["text"]) or re.search(BARE_MONEY_RE, label_line["text"])
+    return _clean_money(m.group(1)) if m else None
+
+
 def _extract_money(label_line: dict | None, money_lines: list[dict], max_distance: float) -> str | None:
     if label_line is None:
         return None
-    # Interleaved layout: the label's own line already has a money token.
-    same_line = re.search(MONEY_RE, label_line["text"]) or re.search(BARE_MONEY_RE, label_line["text"])
+    same_line = _same_line_money(label_line)
     if same_line:
-        return _clean_money(same_line.group(1))
-    # Column-split layout: fall back to the nearest money token by row height.
+        return same_line
     return _nearest_money(label_line, money_lines, max_distance)
 
 
@@ -266,9 +269,44 @@ def parse_worksheet_image(image: Image.Image) -> dict:
         # interleaved layouts instead of using one fixed tolerance for both.
         max_distance = row_spacing * 0.6
 
-    found = {}
+    # Assign each label's value with a greedy claim-and-remove pass, top to
+    # bottom, rather than letting every label search the full money-line
+    # pool independently. Two different real layouts both broke independent
+    # search: (1) a label whose own row has no value can "steal" a
+    # same-line-matched neighbor's value if it happens to be a few pixels
+    # closer than its own farther-but-correct row; (2) on a right-aligned
+    # value column, *two* labels can each independently need
+    # nearest-neighbor lookup and both land on the exact same value row
+    # (confirmed on a real filing: "Updated debt" and "Condominium Common
+    # Charges" both resolved to the same dollar figure). In both cases the
+    # fix is the same: once any label claims a money line -- whether via a
+    # same-line match or a nearest-neighbor one -- remove it from the pool
+    # so no other label can also claim it. Processing top to bottom means
+    # same-line (typically unambiguous, since the value is right there on
+    # the label's own row) is resolved before any nearest-neighbor guess
+    # gets a chance to grab it first.
+    same_line_results: dict[str, str | None] = {}
     for key, label_line in label_lines.items():
-        money = _extract_money(label_line, money_lines, max_distance)
+        same_line_results[key] = _same_line_money(label_line)
+
+    available = list(money_lines)
+    for key, money in same_line_results.items():
+        if money is not None:
+            label_cy = label_lines[key]["cy"]
+            available = [m for m in available if m["cy"] != label_cy]
+
+    found = {}
+    for key, label_line in sorted(label_lines.items(), key=lambda kv: kv[1]["cy"]):
+        money = same_line_results[key]
+        if money is None:
+            claimed = None
+            if available:
+                closest = min(available, key=lambda m: abs(m["cy"] - label_line["cy"]))
+                if abs(closest["cy"] - label_line["cy"]) <= max_distance:
+                    claimed = closest
+            if claimed is not None:
+                money = claimed["money"]
+                available = [m for m in available if m is not claimed]
         found[key] = {"raw_line": label_line["text"].strip(), "money": money}
     return found
 
@@ -297,27 +335,49 @@ def extract_worksheet_fields(document_no: str, document_url: str, pdf_bytes: byt
     condo_fees = _to_float(parsed.get("condo_fees", {}).get("money")) or 0.0
     other_prior = _to_float(parsed.get("other_prior_encumbrances", {}).get("money")) or 0.0
 
-    if fields.updated_debt is not None and fields.total_debt_plus_prior_encumbrances is not None:
+    # The reported Total Debt figure (below) comes from line 2 ("Updated
+    # debt"), which is normally typed. Line 5 ("Total debt plus
+    # encumbrances prior") exists here purely as an independent
+    # cross-check on line 2 -- but on a meaningful fraction of real
+    # filings it is filled in *by hand* rather than typed (confirmed by
+    # inspecting several flagged documents directly), and handwriting is
+    # something Tesseract just cannot read reliably, no amount of
+    # cropping/PSM tuning changes that. So the three real states here are:
+    #   1. line 2 missing entirely -> no Total Debt to report, hard failure.
+    #   2. line 2 present, line 5 unreadable -> no corroboration, but also
+    #      no CONTRADICTING evidence against line 2 -- don't flag this as
+    #      if the reported figure itself were suspect.
+    #   3. both present but disagree -> actual conflicting evidence,
+    #      genuinely needs a manual look (this is what originally caught a
+    #      real OCR digit error during development, and also caught a
+    #      real arithmetic inconsistency in a source document -- that
+    #      catching power is the point of the check, so it stays strict
+    #      here, just not in case 2).
+    if fields.updated_debt is None:
+        fields.ocr_validated = False
+        fields.ocr_warning = (
+            "could not locate a value for 'Updated debt' (line 2) via OCR "
+            "-- Total Debt is unavailable for this case, needs manual review"
+        )
+    elif fields.total_debt_plus_prior_encumbrances is None:
+        fields.ocr_validated = True
+        fields.ocr_warning = (
+            "Total Debt was read directly from line 2; the line 5 cross-check "
+            "total could not be read (often handwritten on this form) so it "
+            "could not be independently confirmed -- spot-check if in doubt"
+        )
+    else:
         expected_line5 = fields.updated_debt + condo_fees + other_prior
         if abs(expected_line5 - fields.total_debt_plus_prior_encumbrances) > 1.0:
             fields.ocr_validated = False
             fields.ocr_warning = (
                 f"line2+line3+line4 ({expected_line5:.2f}) does not match "
                 f"line5 ({fields.total_debt_plus_prior_encumbrances:.2f}); "
-                "likely an OCR digit error, needs manual review"
+                "likely an OCR digit error or an inconsistency in the source "
+                "document, needs manual review"
             )
         else:
             fields.ocr_validated = True
-    else:
-        missing = []
-        if fields.updated_debt is None:
-            missing.append("'Updated debt' (line 2)")
-        if fields.total_debt_plus_prior_encumbrances is None:
-            missing.append("'Total debt' (line 5)")
-        fields.ocr_warning = (
-            f"could not locate a value for {' and '.join(missing)} via OCR "
-            "-- may be genuinely blank in the source document, needs manual review"
-        )
 
     return fields
 

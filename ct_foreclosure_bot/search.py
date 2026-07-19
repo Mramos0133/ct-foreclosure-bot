@@ -46,7 +46,7 @@ async def submit_town_search(
     town: str,
     case_type: str = "Foreclosure Cases",
     property_type: str = "All Properties",
-    case_status: str = "All Cases",
+    case_status: str = "Active Cases",
 ) -> str:
     """Fill and submit the search form for one town. Returns result page HTML."""
     await open_search_form(page, throttle)
@@ -164,7 +164,7 @@ async def iter_town_cases(
     town: str,
     case_type: str = "Foreclosure Cases",
     property_type: str = "All Properties",
-    case_status: str = "All Cases",
+    case_status: str = "Active Cases",
 ):
     """Yield CaseListing rows for a town, across all result pages.
 
