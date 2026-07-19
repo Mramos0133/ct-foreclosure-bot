@@ -52,6 +52,7 @@ async def process_case(
     worksheet = None
     encumbrances_display = ""
     total_debt = None
+    appraised_value = None
     attorney_fees_display = None
     worksheet_url = analysis.worksheet_entry.document_url if analysis.worksheet_entry else None
 
@@ -60,6 +61,7 @@ async def process_case(
             context, throttle, analysis.worksheet_entry.entry_no, analysis.worksheet_entry.document_url
         )
         total_debt = worksheet.updated_debt
+        appraised_value = worksheet.appraised_value
         attorney_fees_display = worksheet.attorney_fees_raw
         if worksheet.encumbrances_subsequent_to_lien is not None:
             # The worksheet only ever gives a lump-sum total for this line --
@@ -77,6 +79,7 @@ async def process_case(
         case_caption=docket.case_caption,
         motion_types_found=analysis.motion_types_found,
         total_debt=total_debt,
+        appraised_value=appraised_value,
         encumbrances_subsequent_itemized=encumbrances_display,
         attorney_fees=attorney_fees_display,
         default_failure_to_appear=analysis.default_failure_to_appear,

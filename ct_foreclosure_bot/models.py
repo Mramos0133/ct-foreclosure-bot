@@ -39,11 +39,12 @@ class DocketInfo:
 class WorksheetFields:
     document_no: str
     document_url: str
+    appraised_value: float | None = None  # worksheet line 1: "Fair market value of property being foreclosed"
     updated_debt: float | None = None
     total_debt_plus_prior_encumbrances: float | None = None
     encumbrances_subsequent_to_lien: float | None = None
     attorney_fees_raw: str | None = None
-    appraisal_fee: float | None = None
+    appraisal_fee: float | None = None  # the fee paid *for* the appraisal (a small service cost) -- distinct from appraised_value above
     title_search_fee: float | None = None
     ocr_validated: bool = False
     ocr_warning: str | None = None
@@ -57,6 +58,7 @@ class CaseResult:
     case_caption: str
     motion_types_found: list[str]
     total_debt: float | None
+    appraised_value: float | None
     encumbrances_subsequent_itemized: str
     attorney_fees: str | None
     default_failure_to_appear: bool

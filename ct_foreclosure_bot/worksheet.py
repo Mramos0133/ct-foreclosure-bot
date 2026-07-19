@@ -321,6 +321,7 @@ def extract_worksheet_fields(document_no: str, document_url: str, pdf_bytes: byt
         raw_lines={k: v["raw_line"] for k, v in parsed.items()},
     )
 
+    fields.appraised_value = _to_float(parsed.get("fair_market_value", {}).get("money"))
     fields.updated_debt = _to_float(parsed.get("updated_debt", {}).get("money"))
     fields.total_debt_plus_prior_encumbrances = _to_float(
         parsed.get("total_debt_plus_prior_encumbrances", {}).get("money")
