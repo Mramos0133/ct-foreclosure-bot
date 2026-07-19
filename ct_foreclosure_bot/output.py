@@ -5,6 +5,11 @@ buffered in memory and written once at the end -- so a run that gets
 interrupted still leaves a usable, complete-so-far CSV, and a resumed run
 just keeps appending (existing docket numbers are skipped upstream via the
 checkpoint, so this never double-writes a row for the same case).
+
+The "Phone Number" column is a deliberately empty placeholder -- this tool
+only pulls from the CT Judicial Branch public case lookup and does not
+look up or scrape contact information from any other source. Fill it in
+downstream via whatever properly-licensed lookup process you use.
 """
 
 import csv
@@ -14,6 +19,7 @@ COLUMNS = [
     "Town",
     "Docket No.",
     "Case Caption",
+    "Phone Number",
     "Motion Type Found",
     "Total Debt",
     "Appraised Value",
@@ -44,6 +50,7 @@ class ResultWriter:
             result.town,
             result.docket_no,
             result.case_caption,
+            "",  # Phone Number -- intentionally left blank; not populated by this tool, see output.py docstring
             "; ".join(result.motion_types_found),
             f"{result.total_debt:.2f}" if result.total_debt is not None else "",
             f"{result.appraised_value:.2f}" if result.appraised_value is not None else "",
