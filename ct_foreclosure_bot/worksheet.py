@@ -59,6 +59,17 @@ _AMOUNT_TOKEN = r"-?[\d][\d,.]*"
 # "1,825.00/2,075.00" vs "$4,100.00/$4,375.00"), so that one is optional.
 MONEY_RE = rf"\$\s*({_AMOUNT_TOKEN}(?:\s*/\s*\$?\s*{_AMOUNT_TOKEN})?)"
 
+# In column-split layouts, OCR sometimes drops the "$" on some value-column
+# rows but not others (observed on a real filing: some rows read "$
+# 204,869.32", others just "2,150.00" with no dollar sign at all) --
+# without $ as an anchor those bare rows were invisible to _find_money_lines
+# entirely, so a label whose same-row value happened to lose its "$" had no
+# candidate to fall back to. This second pattern catches a bare amount with
+# no "$", but -- unlike MONEY_RE -- still requires a 2-digit cents suffix
+# (".XX"), which a bare line-number token like "2." or "10." never has, so
+# it can't be confused with one.
+BARE_MONEY_RE = r"(-?[\d][\d,]*\.\d{2})"
+
 # Label wording varies slightly by form revision (observed both
 # "JD-CV-77 Rev. 5-16" and "JD-CV-77 Rev. 12-16", with different phrasing
 # and even different line numbers for the same fields -- e.g. Attorney's
@@ -200,7 +211,7 @@ def _clean_money(raw: str) -> str:
 def _find_money_lines(lines: list[dict]) -> list[dict]:
     money_lines = []
     for line in lines:
-        m = re.search(MONEY_RE, line["text"])
+        m = re.search(MONEY_RE, line["text"]) or re.search(BARE_MONEY_RE, line["text"])
         if m:
             money_lines.append({**line, "money": _clean_money(m.group(1))})
     return money_lines
@@ -219,7 +230,7 @@ def _extract_money(label_line: dict | None, money_lines: list[dict], max_distanc
     if label_line is None:
         return None
     # Interleaved layout: the label's own line already has a money token.
-    same_line = re.search(MONEY_RE, label_line["text"])
+    same_line = re.search(MONEY_RE, label_line["text"]) or re.search(BARE_MONEY_RE, label_line["text"])
     if same_line:
         return _clean_money(same_line.group(1))
     # Column-split layout: fall back to the nearest money token by row height.
