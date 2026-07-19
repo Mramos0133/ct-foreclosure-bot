@@ -6,10 +6,15 @@ interrupted still leaves a usable, complete-so-far CSV, and a resumed run
 just keeps appending (existing docket numbers are skipped upstream via the
 checkpoint, so this never double-writes a row for the same case).
 
-The "Phone Number" column is a deliberately empty placeholder -- this tool
-only pulls from the CT Judicial Branch public case lookup and does not
-look up or scrape contact information from any other source. Fill it in
-downstream via whatever properly-licensed lookup process you use.
+The "Owner Phone Number" / "New Decision Maker Phone Number" columns are
+deliberately empty placeholders -- this tool only pulls from the CT
+Judicial Branch public case lookup and does not look up or scrape contact
+information from any other source. Fill them in downstream via whatever
+properly-licensed lookup process you use. Likewise "Owner Address" and
+"New Decision Maker" are left blank for manual entry after following the
+linked source document(s) -- see case_analysis.py: these come from
+freeform legal filings (Return of Service, Appearance, Motion to
+Substitute Party), not a fixed-template form, so they aren't auto-OCR'd.
 """
 
 import csv
@@ -19,7 +24,14 @@ COLUMNS = [
     "Town",
     "Docket No.",
     "Case Caption",
-    "Phone Number",
+    "Focus Contact",
+    "Owner Name",
+    "Owner Phone Number",
+    "Owner Address",
+    "Owner Address Source Doc(s)",
+    "New Decision Maker",
+    "New Decision Maker Phone Number",
+    "New Decision Maker Source Doc",
     "Motion Type Found",
     "Total Debt",
     "Appraised Value",
@@ -50,7 +62,14 @@ class ResultWriter:
             result.town,
             result.docket_no,
             result.case_caption,
-            "",  # Phone Number -- intentionally left blank; not populated by this tool, see output.py docstring
+            result.focus_contact,
+            result.owner_name,
+            result.owner_phone,
+            result.owner_address,
+            result.owner_address_source_urls,
+            result.new_decision_maker_name,
+            result.new_decision_maker_phone,
+            result.new_decision_maker_source_url,
             "; ".join(result.motion_types_found),
             f"{result.total_debt:.2f}" if result.total_debt is not None else "",
             f"{result.appraised_value:.2f}" if result.appraised_value is not None else "",

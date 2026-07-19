@@ -13,6 +13,8 @@ recently filed worksheet in the docket.
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import re
+
 from .models import DocketEntry, DocketInfo
 from .motions import (
     find_target_motions,
@@ -20,6 +22,9 @@ from .motions import (
     is_foreclosure_worksheet,
     is_bankruptcy_mention,
     is_reopen_after_bankruptcy,
+    is_return_of_service,
+    is_appearance_entry,
+    is_substitute_party_motion,
 )
 
 
@@ -31,6 +36,10 @@ class DocketAnalysis:
     bankruptcy_stay_reopened: bool = False
     bankruptcy_supporting_text: str = ""
     worksheet_entry: DocketEntry | None = None
+    owner_name: str = ""
+    return_of_service_doc_url: str | None = None
+    appearance_doc_urls: list[str] = field(default_factory=list)
+    substitute_party_doc_url: str | None = None
 
 
 def _parse_date(s: str):
@@ -59,6 +68,24 @@ def _pick_worksheet(entries: list[DocketEntry], matched_entries: list[DocketEntr
     if on_or_after:
         return min(on_or_after, key=lambda e: _parse_date(e.file_date) or datetime.max)
     return max(worksheets, key=lambda e: _parse_date(e.file_date) or datetime.min)
+
+
+_CAPTION_SPLIT = re.compile(r"\bvs?\.\s+", re.I)
+_TRAILING_ET_AL = re.compile(r"\s*,?\s*ET\s*AL\.?\s*$", re.I)
+
+
+def parse_defendant_name(case_caption: str) -> str:
+    """Best-effort defendant/owner name from the case caption's "X v. Y"
+    text -- this is parsed from the court's own case-detail HTML, not OCR'd
+    from a document, so it's a reliable (if occasionally court-truncated)
+    source. Returns "" if the caption doesn't split cleanly.
+    """
+    parts = _CAPTION_SPLIT.split(case_caption, maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    defendant = parts[1].strip()
+    defendant = _TRAILING_ET_AL.sub("", defendant).strip()
+    return defendant
 
 
 def analyze_docket(docket: DocketInfo) -> DocketAnalysis:
@@ -90,4 +117,31 @@ def analyze_docket(docket: DocketInfo) -> DocketAnalysis:
             )
 
     analysis.worksheet_entry = _pick_worksheet(entries, analysis.matched_motion_entries)
+
+    analysis.owner_name = parse_defendant_name(docket.case_caption)
+
+    return_of_service_entries = [
+        e for e in entries if is_return_of_service(e.description) and e.document_url
+    ]
+    if return_of_service_entries:
+        analysis.return_of_service_doc_url = max(
+            return_of_service_entries, key=lambda e: _parse_date(e.file_date) or datetime.min
+        ).document_url
+
+    appearance_entries = [
+        e for e in entries if is_appearance_entry(e.description) and e.document_url
+    ]
+    analysis.appearance_doc_urls = [
+        e.document_url
+        for e in sorted(appearance_entries, key=lambda e: _parse_date(e.file_date) or datetime.min)
+    ]
+
+    substitute_party_entries = [
+        e for e in entries if is_substitute_party_motion(e.description) and e.document_url
+    ]
+    if substitute_party_entries:
+        analysis.substitute_party_doc_url = max(
+            substitute_party_entries, key=lambda e: _parse_date(e.file_date) or datetime.min
+        ).document_url
+
     return analysis

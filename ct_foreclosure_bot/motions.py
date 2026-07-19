@@ -92,6 +92,22 @@ EXTEND_SALE_DATE_PATTERN = re.compile(r"EXTEND.{0,30}(SALE\s+DATE|LAW\s+DAY)")
 
 GRANTED_PATTERN = re.compile(r"\bGRANTED\b")
 
+# Contact-tracing signals: these entry types are where an owner's actual
+# current address (as opposed to the property address, which may no longer
+# be occupied by them) or a new decision-maker (an heir/estate rep/trustee
+# who has replaced the original owner as the party who controls the
+# property) tend to surface. Confirmed against real dockets: "RETURN OF
+# SERVICE" (marshal's return, entry no. always "100.30" in practice) and
+# "APPEARANCE" (JD-CL-12, a fixed state form) are present on essentially
+# every case; "MOTION TO SUBSTITUTE PARTY" entry text is generic and does
+# NOT itself say which side (plaintiff or defendant) is being substituted
+# -- confirmed on a real filing where it turned out to be a plaintiff-side
+# lender substitution, unrelated to the owner -- so this is a "worth a
+# look" signal, not a confirmed one.
+RETURN_OF_SERVICE_PATTERN = re.compile(r"RETURN\s+OF\s+SERVICE|SHERIFF'?S?\s+RETURN")
+APPEARANCE_ENTRY_PATTERN = re.compile(r"^APPEARANCE\b")
+SUBSTITUTE_PARTY_PATTERN = re.compile(r"MOTION\s+TO\s+SUBSTITUTE\s+PARTY")
+
 # The document generated for a granted judgment motion is a separate docket
 # entry, always literally titled "ORDER" (see order_document.py) -- but its
 # numbering suffix relative to the motion entry is not consistent across
@@ -111,3 +127,15 @@ def is_granted(entry_text: str) -> bool:
 
 def is_order_entry(entry_text: str) -> bool:
     return bool(ORDER_ENTRY_PATTERN.search(normalize(entry_text)))
+
+
+def is_return_of_service(entry_text: str) -> bool:
+    return bool(RETURN_OF_SERVICE_PATTERN.search(normalize(entry_text)))
+
+
+def is_appearance_entry(entry_text: str) -> bool:
+    return bool(APPEARANCE_ENTRY_PATTERN.search(normalize(entry_text)))
+
+
+def is_substitute_party_motion(entry_text: str) -> bool:
+    return bool(SUBSTITUTE_PARTY_PATTERN.search(normalize(entry_text)))

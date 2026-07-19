@@ -78,3 +78,18 @@ class CaseResult:
     bankruptcy_chapter: str | None = None  # "7" | "13" | etc., WARM cases only
     continuance_count: int = 0
     warm_cold_subflag: bool = False  # COLD sub-segment: 3+ continuances, no bankruptcy, non-appearing
+    # Contact-tracing fields (see case_analysis.py: Return of Service,
+    # Appearance, and Motion to Substitute Party detection). Owner Name is
+    # parsed from the case caption (reliable); address/phone/decision-maker
+    # name are intentionally left blank for manual entry after following
+    # the source-document link(s) -- these documents are freeform legal
+    # filings, not a fixed-template form, so auto-OCR extraction was not
+    # trusted enough to populate a live outreach list unattended.
+    owner_name: str = ""
+    owner_phone: str = ""
+    owner_address: str = ""
+    owner_address_source_urls: str = ""  # Return of Service / Appearance doc URL(s), "; "-joined
+    new_decision_maker_name: str = ""
+    new_decision_maker_phone: str = ""
+    new_decision_maker_source_url: str = ""  # Motion to Substitute Party doc URL, if found
+    focus_contact: str = "Owner"  # "Owner" | "New Decision Maker"

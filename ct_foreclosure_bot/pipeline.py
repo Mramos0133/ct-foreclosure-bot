@@ -159,6 +159,12 @@ async def process_case(
         encumbrances_subsequent_itemized=encumbrances_display,
         encumbrances_subsequent_to_lien=encumbrances_numeric,
         attorney_fees=attorney_fees_display,
+        owner_name=analysis.owner_name,
+        owner_address_source_urls="; ".join(filter(
+            None, [analysis.return_of_service_doc_url, *analysis.appearance_doc_urls]
+        )),
+        new_decision_maker_source_url=analysis.substitute_party_doc_url or "",
+        focus_contact="New Decision Maker" if analysis.substitute_party_doc_url else "Owner",
         default_failure_to_appear=analysis.default_failure_to_appear,
         bankruptcy_stay_reopened=analysis.bankruptcy_stay_reopened,
         bankruptcy_supporting_text=analysis.bankruptcy_supporting_text,
