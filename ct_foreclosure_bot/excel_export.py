@@ -17,6 +17,8 @@ from .models import CaseResult
 
 COLUMNS = [
     ("Town", lambda r: r.town),
+    ("Street Address", lambda r: r.street_address),
+    ("Zip Code", lambda r: r.zip_code),
     ("Docket No.", lambda r: r.docket_no),
     ("Case Caption", lambda r: r.case_caption),
     ("Focus Contact", lambda r: r.focus_contact),

@@ -55,6 +55,8 @@ class WorksheetFields:
 class CaseResult:
     town: str
     docket_no: str
+    street_address: str
+    zip_code: str
     case_caption: str
     motion_types_found: list[str]
     total_debt: float | None

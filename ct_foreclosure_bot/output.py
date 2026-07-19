@@ -22,6 +22,8 @@ import os
 
 COLUMNS = [
     "Town",
+    "Street Address",
+    "Zip Code",
     "Docket No.",
     "Case Caption",
     "Focus Contact",
@@ -60,6 +62,8 @@ class ResultWriter:
     def write(self, result, worksheet=None) -> None:
         row = [
             result.town,
+            result.street_address,
+            result.zip_code,
             result.docket_no,
             result.case_caption,
             result.focus_contact,

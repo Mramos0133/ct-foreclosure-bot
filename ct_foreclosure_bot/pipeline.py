@@ -45,6 +45,8 @@ async def process_case(
     town: str,
     docket_no: str,
     auction_listing: dict[str, date],
+    street_address: str = "",
+    zip_code: str = "",
 ) -> tuple[CaseResult | None, object | None]:
     """Fetch + analyze one docket. Returns (CaseResult or None, WorksheetFields or None).
 
@@ -55,6 +57,10 @@ async def process_case(
     `auction_listing` is the statewide pending-sale listing fetched once
     per run (see auction_site.py) -- passed in rather than fetched here so
     it's only ever pulled once, not once per case.
+
+    `street_address`/`zip_code` come straight from the property search
+    results row (CaseListing) -- no extra fetch needed, they're already
+    part of the initial search grid.
     """
     docket = await fetch_docket(context, throttle, docket_no)
     analysis = analyze_docket(docket)
@@ -151,6 +157,8 @@ async def process_case(
 
     result = CaseResult(
         town=town,
+        street_address=street_address,
+        zip_code=zip_code,
         docket_no=docket.docket_no,
         case_caption=docket.case_caption,
         motion_types_found=analysis.motion_types_found,
@@ -224,7 +232,10 @@ async def run_pipeline(
                     continue
 
                 try:
-                    result, worksheet = await process_case(context, throttle, town, row.docket_no, auction_listing)
+                    result, worksheet = await process_case(
+                        context, throttle, town, row.docket_no, auction_listing,
+                        street_address=row.street_address, zip_code=row.zip_code,
+                    )
                 except Exception as exc:  # noqa: BLE001 - one bad case must not kill the run
                     log.exception("failed processing docket %s", row.docket_no)
                     checkpoint.mark_docket_processed(row.docket_no, town, matched=False, status="error", error=str(exc))
