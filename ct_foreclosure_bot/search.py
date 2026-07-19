@@ -120,11 +120,16 @@ def parse_results_table(html: str, search_town: str, case_type: str = "Foreclosu
             continue
         rows.append(
             CaseListing(
-                city_town=cells[0].get_text(strip=True),
-                street_address=cells[1].get_text(strip=True),
+                city_town=cells[0].get_text(" ", strip=True),
+                # Multi-line addresses (e.g. a unit number on its own line
+                # after a <br/>) need a separator here -- confirmed on a
+                # real row ("166 GRAVEL STREET<br/>UNIT #B16") that without
+                # one, get_text() glues the lines together with no space
+                # at all ("166 GRAVEL STREETUNIT #B16").
+                street_address=cells[1].get_text(" ", strip=True),
                 zip_code=cells[2].get_text(strip=True),
                 case_type=case_type,
-                case_name=cells[3].get_text(strip=True),
+                case_name=cells[3].get_text(" ", strip=True),
                 docket_no=docket_no_match.group(1),
                 property_type=cells[5].get_text(strip=True),
                 disposition=cells[6].get_text(" ", strip=True),
