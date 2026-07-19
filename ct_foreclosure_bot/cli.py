@@ -5,6 +5,12 @@ Usage examples:
     python -m ct_foreclosure_bot --output results.csv
     python -m ct_foreclosure_bot --town "New Haven" --headed
 
+Statewide runs can be split into batches against one shared
+--checkpoint-db, each batch resuming where the last left off:
+    python -m ct_foreclosure_bot --checkpoint-db statewide.sqlite3 --town-start 0 --town-count 15
+    python -m ct_foreclosure_bot --checkpoint-db statewide.sqlite3 --town-start 15 --town-count 15
+    ...
+
 Interrupt with Ctrl-C at any time -- already-processed dockets and
 completed towns are checkpointed in the SQLite file (--checkpoint-db) and
 will be skipped automatically on the next run with the same --checkpoint-db
@@ -42,6 +48,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--town", help="Process a single CT town instead of all 169 (e.g. 'Hartford'). Useful for testing.")
+    p.add_argument("--town-start", type=int, default=None, help="0-based index into the alphabetical 169-town list to start at -- for running the statewide list in batches against a shared --checkpoint-db. Mutually exclusive with --town.")
+    p.add_argument("--town-count", type=int, default=None, help="Number of towns to process starting at --town-start (default: all remaining). Ignored without --town-start.")
     p.add_argument("--limit", type=int, default=None, help="Stop after this many MATCHED cases (across all towns processed this run). Useful for a quick test batch.")
     p.add_argument("--case-status", default="Active Cases", choices=["All Cases", "Active Cases", "Disposed Cases"], help="Defaults to Active Cases only -- pass 'All Cases' or 'Disposed Cases' to widen it.")
     p.add_argument("--property-type", default="All Properties", choices=["All Properties", "Commercial Properties", "Residential Properties"])
@@ -83,7 +91,15 @@ async def _main_async(args: argparse.Namespace) -> None:
             checkpoint.close()
         return
 
-    towns = [args.town] if args.town else list(CT_TOWNS)
+    if args.town:
+        towns = [args.town]
+    elif args.town_start is not None:
+        if not (0 <= args.town_start < len(CT_TOWNS)):
+            raise SystemExit(f"--town-start must be in [0, {len(CT_TOWNS) - 1}]")
+        end = args.town_start + args.town_count if args.town_count is not None else len(CT_TOWNS)
+        towns = CT_TOWNS[args.town_start:end]
+    else:
+        towns = list(CT_TOWNS)
 
     checkpoint = Checkpoint(args.checkpoint_db)
     result_writer = ResultWriter(args.output)
