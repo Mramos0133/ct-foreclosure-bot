@@ -73,7 +73,7 @@ class CaseResult:
     lead_bucket: str = "UNCLASSIFIED"  # "HOT" | "WARM" | "COLD" | "POTENTIAL_SHORT_SALE" | "UNCLASSIFIED"
     judgment_granted: bool = False
     non_appearing: bool = False  # proxy: default_failure_to_appear
-    on_auction_site: bool | None = None  # None = not applicable (e.g. strict foreclosure has no auction)
+    on_auction_site: bool = False  # whether this docket is currently listed on the statewide pending-sale auction site
     key_date: str | None = None  # Law Day or Sale Date, ISO format, from the Order document
     key_date_label: str | None = None  # "Law Day" | "Sale Date" | None
     days_to_key_date: int | None = None

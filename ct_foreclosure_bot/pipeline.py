@@ -94,14 +94,15 @@ async def process_case(
     else:
         encumbrances_display = "no Foreclosure Worksheet found in docket"
 
-    on_auction_site = None
+    # Always a definite Yes/No, never N/A: a strict foreclosure case can
+    # never appear on the pending-sale listing (no auction happens for
+    # strict foreclosure -- the property transfers directly, no sale
+    # event), but for the purpose this column serves -- is the case
+    # currently visible to other investors watching the public auction
+    # list -- "No" is the correct, meaningful answer for those cases too,
+    # not an inapplicable one.
     normalized = normalize_docket(docket.docket_no)
-    if normalized in auction_listing:
-        on_auction_site = True
-    elif any("FORECLOSURE BY SALE" in m.upper() for m in analysis.motion_types_found):
-        # Only meaningful for by-sale cases -- strict foreclosure has no
-        # auction at all, so "not found in the listing" isn't a signal for it.
-        on_auction_site = False
+    on_auction_site = normalized in auction_listing
 
     today = date.today()
     ranking = classify_case(docket, analysis, on_auction_site, today)

@@ -44,7 +44,7 @@ class RankingInfo:
     lead_bucket: str
     judgment_granted: bool
     non_appearing: bool
-    on_auction_site: bool | None
+    on_auction_site: bool
     key_date: date | None
     key_date_label: str | None
     days_to_key_date: int | None
@@ -72,7 +72,7 @@ def _matched_motion_is_granted(entries: list[DocketEntry]) -> bool:
 def classify_case(
     docket: DocketInfo,
     analysis: DocketAnalysis,
-    on_auction_site: bool | None,
+    on_auction_site: bool,
     today: date,
 ) -> RankingInfo:
     """Determine the lead bucket and supporting metrics for one case.
@@ -156,7 +156,7 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool) -> None:
     elif (
         ranking.judgment_granted
         and ranking.non_appearing
-        and ranking.on_auction_site is not True
+        and not ranking.on_auction_site
         and not key_date_in_past
     ):
         ranking.lead_bucket = "HOT"

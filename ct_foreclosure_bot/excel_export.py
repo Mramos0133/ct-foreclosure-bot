@@ -35,7 +35,7 @@ COLUMNS = [
     ("Key Date", lambda r: r.key_date or ""),
     ("Key Date Type", lambda r: r.key_date_label or ""),
     ("Days to Key Date", lambda r: r.days_to_key_date if r.days_to_key_date is not None else ""),
-    ("On Auction Site (Y/N/N-A)", lambda r: "N/A" if r.on_auction_site is None else ("Y" if r.on_auction_site else "N")),
+    ("On Auction Site (Y/N)", lambda r: "Y" if r.on_auction_site else "N"),
     ("Bankruptcy Chapter", lambda r: r.bankruptcy_chapter or ""),
     ("Continuance Count", lambda r: r.continuance_count),
     ("Warm-Cold Sub-Flag (Y/N)", lambda r: "Y" if r.warm_cold_subflag else "N"),
