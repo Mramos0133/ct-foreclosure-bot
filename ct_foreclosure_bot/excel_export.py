@@ -10,7 +10,7 @@ a crawl to get an up-to-date snapshot.
 """
 
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 from .models import CaseResult
@@ -21,6 +21,7 @@ COLUMNS = [
     ("Zip Code", lambda r: r.zip_code),
     ("Docket No.", lambda r: r.docket_no),
     ("Case Caption", lambda r: r.case_caption),
+    ("Summary of Case", lambda r: r.case_summary),
     ("Focus Contact", lambda r: r.focus_contact),
     ("Owner Name", lambda r: r.owner_name),
     ("Owner Phone Number", lambda r: r.owner_phone),
@@ -109,6 +110,10 @@ def build_workbook(results: list[CaseResult]) -> Workbook:
         bucket = r.lead_bucket if r.lead_bucket in by_bucket else "UNCLASSIFIED"
         by_bucket[bucket].append(r)
 
+    summary_col_idx = next(
+        i for i, (header, _) in enumerate(COLUMNS, start=1) if header == "Summary of Case"
+    )
+
     for bucket in SHEET_ORDER:
         rows = sorted(by_bucket.get(bucket, []), key=SORT_KEYS[bucket])
         ws = wb.create_sheet(title=bucket)
@@ -119,10 +124,21 @@ def build_workbook(results: list[CaseResult]) -> Workbook:
 
         for row_idx, result in enumerate(rows, start=2):
             for col_idx, (_, getter) in enumerate(COLUMNS, start=1):
-                ws.cell(row=row_idx, column=col_idx, value=getter(result))
+                value = getter(result)
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                if col_idx == summary_col_idx:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+            # Multi-line bullet text needs a taller row than the default,
+            # sized to how many bullets this case actually has -- a fixed
+            # height would either clip a HOT case with a long history or
+            # waste space on a case with only one or two bullets.
+            line_count = result.case_summary.count("\n") + 1 if result.case_summary else 1
+            ws.row_dimensions[row_idx].height = max(15, line_count * 15)
 
         for col_idx in range(1, len(COLUMNS) + 1):
-            ws.column_dimensions[get_column_letter(col_idx)].width = 22
+            ws.column_dimensions[get_column_letter(col_idx)].width = (
+                60 if col_idx == summary_col_idx else 22
+            )
         ws.freeze_panes = "A2"
 
     return wb

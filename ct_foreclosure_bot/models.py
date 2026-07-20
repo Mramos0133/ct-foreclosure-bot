@@ -95,3 +95,4 @@ class CaseResult:
     new_decision_maker_phone: str = ""
     new_decision_maker_source_url: str = ""  # Motion to Substitute Party doc URL, if found
     focus_contact: str = "Owner"  # "Owner" | "New Decision Maker"
+    case_summary: str = ""  # dated bullet-point recap of recent activity, see case_summary.py

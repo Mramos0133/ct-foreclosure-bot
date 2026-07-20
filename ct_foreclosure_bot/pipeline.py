@@ -17,6 +17,7 @@ from playwright.async_api import Page, BrowserContext
 
 from .auction_site import normalize_docket
 from .case_analysis import analyze_docket
+from .case_summary import build_case_summary, extract_continuance_reason
 from .checkpoint import Checkpoint
 from .docket import fetch_docket
 from .lead_ranking import (
@@ -24,6 +25,7 @@ from .lead_ranking import (
     finalize_judgment_granted, finalize_bankruptcy_chapter,
 )
 from .models import CaseResult
+from .motions import is_extend_sale_date_or_law_day, is_granted
 from .order_document import (
     fetch_document_text, extract_key_date, extract_bankruptcy_chapter, is_order_granted,
 )
@@ -156,6 +158,26 @@ async def process_case(
         if short_sale_ratio > 0.85:
             ranking.lead_bucket = "POTENTIAL_SHORT_SALE"
 
+    # Only OCR a continuance motion's own text when it was actually
+    # granted -- a denied one has no "why" worth surfacing, and this is
+    # an extra fetch+OCR per continuance, so it's skipped for cases that
+    # don't need it.
+    continuance_reasons: dict[str, str] = {}
+    for e in docket.entries:
+        if is_extend_sale_date_or_law_day(e.description) and is_granted(e.description) and e.document_url:
+            try:
+                motion_text = await fetch_document_text(context, throttle, e.document_url)
+                reason = extract_continuance_reason(motion_text)
+                if reason:
+                    continuance_reasons[e.entry_no] = reason
+            except Exception:  # noqa: BLE001 -- a failed fetch just means no reason for this bullet
+                log.exception("failed fetching continuance motion for %s entry %s", docket_no, e.entry_no)
+
+    case_summary = build_case_summary(
+        docket.entries, ranking.key_date, ranking.key_date_label,
+        ranking.bankruptcy_chapter, continuance_reasons,
+    )
+
     result = CaseResult(
         town=town,
         street_address=street_address,
@@ -189,6 +211,7 @@ async def process_case(
         bankruptcy_chapter=ranking.bankruptcy_chapter,
         continuance_count=ranking.continuance_count,
         warm_cold_subflag=ranking.warm_cold_subflag,
+        case_summary=case_summary,
     )
     return result, worksheet
 
