@@ -80,27 +80,33 @@ def build_case_summary(
         parsed = _parse_entry_date(e.file_date)
         display_date = e.file_date.strip()
 
+        # A single entry can be both a target motion (e.g. "Motion to Open
+        # Judgment") *and* an extend-sale-date/Law Day motion -- confirmed
+        # on real dockets, where the common combined filing is literally
+        # titled "MOTION TO OPEN JUDGMENT AND EXTEND THE SALE DATE". Build
+        # one bullet per entry covering whichever of those apply, rather
+        # than one bullet per matched pattern, so that single filing
+        # doesn't show up twice with the same date.
         motions = find_target_motions(e.description)
-        if motions:
+        is_continuance = is_extend_sale_date_or_law_day(e.description)
+        if motions or is_continuance:
+            label = "; ".join(motions) if motions else "Motion to extend sale date/Law Day"
+            if is_continuance and motions:
+                label += " (extend sale date/Law Day)"
             if is_granted(e.description):
-                bullets.append((parsed, display_date, f"{'; '.join(motions)} -- GRANTED"))
+                text = f"{label} -- GRANTED"
+                if is_continuance:
+                    reason = continuance_reasons.get(e.entry_no)
+                    text += f" (reason: {reason})" if reason else " (reason not found in motion text)"
+                bullets.append((parsed, display_date, text))
             elif DENIED_PATTERN.search(e.description):
-                bullets.append((parsed, display_date, f"{'; '.join(motions)} -- denied"))
+                bullets.append((parsed, display_date, f"{label} -- denied"))
 
         if is_bankruptcy_mention(e.description):
             bullets.append((parsed, display_date, "Bankruptcy filed / automatic stay in effect"))
 
         if is_failure_to_appear_default(e.description):
             bullets.append((parsed, display_date, "Defendant defaulted for failure to appear"))
-
-        if is_extend_sale_date_or_law_day(e.description):
-            if is_granted(e.description):
-                reason = continuance_reasons.get(e.entry_no)
-                text = "Motion to extend sale date/Law Day -- GRANTED"
-                text += f" (reason: {reason})" if reason else " (reason not found in motion text)"
-                bullets.append((parsed, display_date, text))
-            elif DENIED_PATTERN.search(e.description):
-                bullets.append((parsed, display_date, "Motion to extend sale date/Law Day -- denied"))
 
     if key_date and key_date_label:
         bullets.append((
