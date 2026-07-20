@@ -29,7 +29,7 @@ from .browser import launch_browser, new_context
 from .checkpoint import Checkpoint
 from .excel_export import export_to_xlsx
 from .output import ResultWriter, ReviewWriter
-from .pipeline import run_pipeline
+from .pipeline import run_pipeline, run_case_summary_backfill
 from .search import open_search_form  # noqa: F401 (kept for potential future warmup use)
 from .throttle import Throttle
 from .towns import CT_TOWNS
@@ -58,6 +58,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoint-db", default="ct_foreclosure_checkpoint.sqlite3", help="SQLite checkpoint file; reuse the same path to resume a run.")
     p.add_argument("--export-xlsx", default="ct_foreclosure_leads.xlsx", help="Ranked, multi-sheet (HOT/WARM/COLD/POTENTIAL_SHORT_SALE/UNCLASSIFIED) Excel workbook, (re)written at the end of every run from the checkpoint's full case data. Pass '' to skip.")
     p.add_argument("--export-only", action="store_true", help="Skip crawling entirely; just (re)build --export-xlsx from the existing --checkpoint-db. Useful to refresh the ranked workbook without hitting the site again.")
+    p.add_argument("--backfill-case-summary", action="store_true", help="Skip crawling; instead rebuild the 'Summary of Case' column for every already-matched case in --checkpoint-db (re-fetches each docket + OCRs continuance motions, but reuses the already-stored key date/bankruptcy chapter -- no worksheet/order/auction-site re-fetch). Resumable via --limit across multiple invocations; re-exports --export-xlsx when done.")
     p.add_argument("--headed", action="store_true", help="Run the browser headed (debugging only).")
     p.add_argument("--proxy", default=None, help="Explicit proxy server (defaults to HTTPS_PROXY env var if set).")
     p.add_argument("--disable-tls12-workaround", action="store_true", help="Disable forcing Chromium to TLS 1.2 max. Only useful if you are NOT behind a TLS-intercepting proxy that mishandles TLS 1.3, and you need TLS 1.3.")
@@ -88,6 +89,33 @@ async def _main_async(args: argparse.Namespace) -> None:
                     counts["POTENTIAL_SHORT_SALE"], counts["UNCLASSIFIED"],
                 )
         finally:
+            checkpoint.close()
+        return
+
+    if args.backfill_case_summary:
+        checkpoint = Checkpoint(args.checkpoint_db)
+        throttle = Throttle(min_delay=args.min_delay, max_delay=args.max_delay)
+        try:
+            async with async_playwright() as p:
+                browser = await launch_browser(
+                    p,
+                    headless=not args.headed,
+                    proxy_server=args.proxy,
+                    disable_tls12_workaround=args.disable_tls12_workaround,
+                )
+                try:
+                    context = await new_context(browser)
+                    await run_case_summary_backfill(context, throttle, checkpoint, limit=args.limit)
+                finally:
+                    await browser.close()
+        finally:
+            if args.export_xlsx:
+                counts = export_to_xlsx(checkpoint.all_case_results(), args.export_xlsx)
+                logging.getLogger("ct_foreclosure_bot").info(
+                    "exported %s: HOT=%d WARM=%d COLD=%d SHORT_SALE=%d UNCLASSIFIED=%d",
+                    args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"],
+                    counts["POTENTIAL_SHORT_SALE"], counts["UNCLASSIFIED"],
+                )
             checkpoint.close()
         return
 

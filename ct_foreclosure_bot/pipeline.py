@@ -9,6 +9,7 @@ marked complete once every result page has been walked without hitting
 --limit, so an interrupted or limited run resumes mid-town correctly.
 """
 
+import dataclasses
 import logging
 import sys
 from datetime import date, datetime, timezone
@@ -39,6 +40,26 @@ log = logging.getLogger("ct_foreclosure_bot")
 
 def _fmt_motion_type(labels: list[str]) -> str:
     return "; ".join(labels)
+
+
+async def _fetch_continuance_reasons(context, throttle, docket_entries, docket_no) -> dict[str, str]:
+    """OCR each granted continuance motion for a best-effort "why".
+
+    Only fetched for entries that were actually granted -- a denied one
+    has no reason worth surfacing, and this is an extra fetch+OCR per
+    continuance, so it's skipped where it isn't needed.
+    """
+    reasons: dict[str, str] = {}
+    for e in docket_entries:
+        if is_extend_sale_date_or_law_day(e.description) and is_granted(e.description) and e.document_url:
+            try:
+                motion_text = await fetch_document_text(context, throttle, e.document_url)
+                reason = extract_continuance_reason(motion_text)
+                if reason:
+                    reasons[e.entry_no] = reason
+            except Exception:  # noqa: BLE001 -- a failed fetch just means no reason for this bullet
+                log.exception("failed fetching continuance motion for %s entry %s", docket_no, e.entry_no)
+    return reasons
 
 
 async def process_case(
@@ -158,20 +179,7 @@ async def process_case(
         if short_sale_ratio > 0.85:
             ranking.lead_bucket = "POTENTIAL_SHORT_SALE"
 
-    # Only OCR a continuance motion's own text when it was actually
-    # granted -- a denied one has no "why" worth surfacing, and this is
-    # an extra fetch+OCR per continuance, so it's skipped for cases that
-    # don't need it.
-    continuance_reasons: dict[str, str] = {}
-    for e in docket.entries:
-        if is_extend_sale_date_or_law_day(e.description) and is_granted(e.description) and e.document_url:
-            try:
-                motion_text = await fetch_document_text(context, throttle, e.document_url)
-                reason = extract_continuance_reason(motion_text)
-                if reason:
-                    continuance_reasons[e.entry_no] = reason
-            except Exception:  # noqa: BLE001 -- a failed fetch just means no reason for this bullet
-                log.exception("failed fetching continuance motion for %s entry %s", docket_no, e.entry_no)
+    continuance_reasons = await _fetch_continuance_reasons(context, throttle, docket.entries, docket_no)
 
     case_summary = build_case_summary(
         docket.entries, ranking.key_date, ranking.key_date_label,
@@ -304,4 +312,58 @@ async def run_pipeline(
     log.info(
         "run summary: %d dockets processed, %d matched, %d errors, %d towns completed",
         stats["dockets_processed"], stats["matched"], stats["errors"], stats["towns_completed"],
+    )
+
+
+async def backfill_case_summary(context: BrowserContext, throttle: Throttle, result: CaseResult) -> CaseResult:
+    """Rebuild just `case_summary` on an already-scraped CaseResult.
+
+    For a case matched before case_summary.py existed: re-fetches the
+    docket entries (1 request) and OCRs any granted continuance motions
+    for a "why" (see _fetch_continuance_reasons), then reuses everything
+    else already stored on `result` -- key_date/key_date_label/
+    bankruptcy_chapter don't need re-deriving from the Order document,
+    since they were already correctly extracted the first time. Returns a
+    new CaseResult with only case_summary changed.
+    """
+    docket = await fetch_docket(context, throttle, result.docket_no)
+    continuance_reasons = await _fetch_continuance_reasons(context, throttle, docket.entries, result.docket_no)
+    key_date = date.fromisoformat(result.key_date) if result.key_date else None
+    case_summary = build_case_summary(
+        docket.entries, key_date, result.key_date_label, result.bankruptcy_chapter, continuance_reasons,
+    )
+    return dataclasses.replace(result, case_summary=case_summary)
+
+
+async def run_case_summary_backfill(
+    context: BrowserContext,
+    throttle: Throttle,
+    checkpoint: Checkpoint,
+    limit: int | None = None,
+) -> None:
+    """Backfill case_summary across every already-matched case in the
+    checkpoint, skipping ones a prior (possibly interrupted) backfill run
+    already finished -- see Checkpoint.is_summary_backfilled.
+    """
+    results = checkpoint.all_case_results()
+    done_count = 0
+    for result in results:
+        if checkpoint.is_summary_backfilled(result.docket_no):
+            continue
+        if limit is not None and done_count >= limit:
+            log.info("reached --limit of %d backfilled cases, stopping", limit)
+            break
+        try:
+            updated = await backfill_case_summary(context, throttle, result)
+            checkpoint.save_case_result(updated)
+            checkpoint.mark_summary_backfilled(result.docket_no)
+            done_count += 1
+            log.info("BACKFILLED  %s  (%d this run)", result.docket_no, done_count)
+        except Exception:  # noqa: BLE001 -- one bad docket shouldn't sink the whole backfill
+            log.exception("failed backfilling case_summary for %s", result.docket_no)
+
+    stats = checkpoint.summary_backfill_stats()
+    log.info(
+        "backfill summary: %d/%d cases backfilled overall (%d this run)",
+        stats["backfilled"], stats["total"], done_count,
     )

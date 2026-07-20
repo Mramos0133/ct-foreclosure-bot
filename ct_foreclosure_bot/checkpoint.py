@@ -47,6 +47,15 @@ CREATE TABLE IF NOT EXISTS case_results (
     data         TEXT NOT NULL,  -- JSON-serialized CaseResult
     saved_at     TEXT NOT NULL
 );
+
+-- Tracks which already-matched cases have had case_summary backfilled by
+-- a maintenance pass (see cli.py --backfill-case-summary), independent of
+-- processed_dockets/case_results so a re-run after a restart skips work
+-- already done instead of re-fetching every docket from scratch.
+CREATE TABLE IF NOT EXISTS summary_backfilled (
+    docket_no      TEXT PRIMARY KEY,
+    backfilled_at  TEXT NOT NULL
+);
 """
 
 
@@ -119,6 +128,25 @@ class Checkpoint:
 
         cur = self._conn.execute("SELECT data FROM case_results")
         return [CaseResult(**json.loads(row[0])) for row in cur.fetchall()]
+
+    def is_summary_backfilled(self, docket_no: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM summary_backfilled WHERE docket_no = ?", (docket_no,)
+        )
+        return cur.fetchone() is not None
+
+    def mark_summary_backfilled(self, docket_no: str) -> None:
+        with closing(self._conn.cursor()) as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO summary_backfilled (docket_no, backfilled_at) VALUES (?, ?)",
+                (docket_no, _now()),
+            )
+        self._conn.commit()
+
+    def summary_backfill_stats(self) -> dict:
+        total = self._conn.execute("SELECT COUNT(*) FROM case_results").fetchone()[0]
+        done = self._conn.execute("SELECT COUNT(*) FROM summary_backfilled").fetchone()[0]
+        return {"total": total, "backfilled": done}
 
     def stats(self) -> dict:
         total = self._conn.execute("SELECT COUNT(*) FROM processed_dockets").fetchone()[0]
