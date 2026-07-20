@@ -60,14 +60,22 @@ def _parse_entry_date(file_date: str) -> datetime | None:
         return None
 
 
+RECENT_ACTIONS_LIMIT = 3
+
+
 def build_case_summary(
     entries: list[DocketEntry],
     key_date: date | None,
     key_date_label: str | None,
     bankruptcy_chapter: str | None,
     continuance_reasons: dict[str, str],
+    recent_limit: int = RECENT_ACTIONS_LIMIT,
 ) -> str:
-    """Return a "\\n"-joined, chronologically-sorted list of "- M/D/YYYY: ..." bullets.
+    """Return a "\\n"-joined bullet list: current status facts (auction
+    date, bankruptcy chapter) first, then just the `recent_limit` most
+    recent case actions, newest first -- not the full case history. The
+    point of this column is "what's happened lately," so a case open
+    since 2022 shouldn't dump years of docket entries into one cell.
 
     `continuance_reasons` maps entry_no -> reason label for continuance
     entries the caller already OCR'd (see pipeline.py); entries not in
@@ -108,19 +116,21 @@ def build_case_summary(
         if is_failure_to_appear_default(e.description):
             bullets.append((parsed, display_date, "Defendant defaulted for failure to appear"))
 
-    if key_date and key_date_label:
-        bullets.append((
-            datetime.combine(key_date, datetime.min.time()),
-            key_date.strftime("%m/%d/%Y"),
-            f"{key_date_label} currently scheduled for {key_date.strftime('%m/%d/%Y')}",
-        ))
+    # Most recent action first, entries with no parseable date sink to the
+    # bottom (least useful, not "recent" by definition), then cut down to
+    # just the last `recent_limit`.
+    bullets.sort(key=lambda b: b[0] or datetime.min, reverse=True)
+    recent = bullets[:recent_limit]
 
-    if bankruptcy_chapter:
-        bullets.append((None, "", f"Bankruptcy Chapter {bankruptcy_chapter}"))
-
-    bullets.sort(key=lambda b: (b[0] is None, b[0] or datetime.min))
-
+    # Current status facts always shown, regardless of how old the entry
+    # that set them was -- these answer "what's the auction date" / "are
+    # they in bankruptcy right now," which matter even if that entry
+    # itself didn't make the recent-actions cut.
     lines = []
-    for _, display_date, text in bullets:
-        lines.append(f"- {display_date}: {text}" if display_date else f"- {text}")
+    if key_date and key_date_label:
+        lines.append(f"- {key_date_label} currently scheduled for {key_date.strftime('%m/%d/%Y')}")
+    if bankruptcy_chapter:
+        lines.append(f"- Bankruptcy Chapter {bankruptcy_chapter}")
+    for _, display_date, text in recent:
+        lines.append(f"- {display_date}: {text}")
     return "\n".join(lines)
