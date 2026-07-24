@@ -51,8 +51,20 @@ MEANINGFUL_FIELDS = (
 )
 
 
+def _fields_differ(old_value, new_value) -> bool:
+    # A legacy quirk: cases saved before the "On Auction Site always
+    # Y/N, never N/A" fix earlier this session stored on_auction_site as
+    # None for strict-foreclosure cases. None and False mean the same
+    # thing there (not on the auction site) and shouldn't read as a real
+    # change -- normalize via bool() whenever the current field is a
+    # bool, so an old None doesn't false-positive against a new False.
+    if isinstance(new_value, bool):
+        return bool(old_value) != bool(new_value)
+    return old_value != new_value
+
+
 def _meaningfully_different(old: CaseResult, new: CaseResult) -> bool:
-    return any(getattr(old, f) != getattr(new, f) for f in MEANINGFUL_FIELDS)
+    return any(_fields_differ(getattr(old, f), getattr(new, f)) for f in MEANINGFUL_FIELDS)
 
 
 async def recheck_matched_case(
