@@ -220,6 +220,7 @@ async def process_case(
         continuance_count=ranking.continuance_count,
         warm_cold_subflag=ranking.warm_cold_subflag,
         case_summary=case_summary,
+        docket_entry_count=len(docket.entries),
     )
     return result, worksheet
 

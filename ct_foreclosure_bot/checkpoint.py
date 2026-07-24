@@ -105,6 +105,15 @@ class Checkpoint:
             )
         self._conn.commit()
 
+    def clear_completed_towns(self) -> None:
+        """Reset town-level bookkeeping so a run re-walks every town's
+        search results (to discover newly-filed cases), while leaving
+        processed_dockets untouched -- per-docket dedup is what keeps an
+        update run cheap, and stays intact regardless of this.
+        """
+        self._conn.execute("DELETE FROM completed_towns")
+        self._conn.commit()
+
     def review_items(self) -> list[tuple[str, str, str]]:
         """Return (docket_no, town, error) for every docket that errored."""
         cur = self._conn.execute(

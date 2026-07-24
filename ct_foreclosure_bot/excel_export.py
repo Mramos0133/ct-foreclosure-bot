@@ -10,10 +10,13 @@ a crawl to get an up-to-date snapshot.
 """
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .models import CaseResult
+
+NEW_ROW_FILL = PatternFill(start_color="FFC6EFCE", end_color="FFC6EFCE", fill_type="solid")  # green
+UPDATED_ROW_FILL = PatternFill(start_color="FFFFEB9C", end_color="FFFFEB9C", fill_type="solid")  # yellow
 
 COLUMNS = [
     ("Town", lambda r: r.town),
@@ -101,7 +104,18 @@ SORT_KEYS = {
 }
 
 
-def build_workbook(results: list[CaseResult]) -> Workbook:
+def build_workbook(
+    results: list[CaseResult],
+    new_dockets: set[str] | None = None,
+    updated_dockets: set[str] | None = None,
+) -> Workbook:
+    """`new_dockets`/`updated_dockets` are docket numbers to highlight
+    green/yellow respectively (see update_run.py's "Update files" flow) --
+    a row not in either set gets no fill, same as every export before this.
+    """
+    new_dockets = new_dockets or set()
+    updated_dockets = updated_dockets or set()
+
     wb = Workbook()
     wb.remove(wb.active)  # default blank sheet
 
@@ -123,11 +137,19 @@ def build_workbook(results: list[CaseResult]) -> Workbook:
             cell.font = Font(bold=True)
 
         for row_idx, result in enumerate(rows, start=2):
+            row_fill = None
+            if result.docket_no in new_dockets:
+                row_fill = NEW_ROW_FILL
+            elif result.docket_no in updated_dockets:
+                row_fill = UPDATED_ROW_FILL
+
             for col_idx, (_, getter) in enumerate(COLUMNS, start=1):
                 value = getter(result)
                 cell = ws.cell(row=row_idx, column=col_idx, value=value)
                 if col_idx == summary_col_idx:
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
+                if row_fill is not None:
+                    cell.fill = row_fill
             # Multi-line bullet text needs a taller row than the default,
             # sized to how many bullets this case actually has -- a fixed
             # height would either clip a HOT case with a long history or
@@ -144,8 +166,13 @@ def build_workbook(results: list[CaseResult]) -> Workbook:
     return wb
 
 
-def export_to_xlsx(results: list[CaseResult], output_path: str) -> dict:
-    wb = build_workbook(results)
+def export_to_xlsx(
+    results: list[CaseResult],
+    output_path: str,
+    new_dockets: set[str] | None = None,
+    updated_dockets: set[str] | None = None,
+) -> dict:
+    wb = build_workbook(results, new_dockets=new_dockets, updated_dockets=updated_dockets)
     wb.save(output_path)
     counts = {b: 0 for b in SHEET_ORDER}
     for r in results:

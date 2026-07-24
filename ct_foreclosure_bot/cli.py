@@ -33,6 +33,7 @@ from .pipeline import run_pipeline, run_case_summary_backfill
 from .search import open_search_form  # noqa: F401 (kept for potential future warmup use)
 from .throttle import Throttle
 from .towns import CT_TOWNS
+from .update_run import run_update
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -59,6 +60,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--export-xlsx", default="ct_foreclosure_leads.xlsx", help="Ranked, multi-sheet (HOT/WARM/COLD/POTENTIAL_SHORT_SALE/UNCLASSIFIED) Excel workbook, (re)written at the end of every run from the checkpoint's full case data. Pass '' to skip.")
     p.add_argument("--export-only", action="store_true", help="Skip crawling entirely; just (re)build --export-xlsx from the existing --checkpoint-db. Useful to refresh the ranked workbook without hitting the site again.")
     p.add_argument("--backfill-case-summary", action="store_true", help="Skip crawling; instead rebuild the 'Summary of Case' column for every already-matched case in --checkpoint-db (re-fetches each docket + OCRs continuance motions, but reuses the already-stored key date/bankruptcy chapter -- no worksheet/order/auction-site re-fetch). Resumable via --limit across multiple invocations; re-exports --export-xlsx when done.")
+    p.add_argument("--update", action="store_true", help="\"Update files\": re-walk all towns for genuinely new cases (cheap -- per-docket dedup skips everything already seen), then recheck every already-matched case for real changes (cheap staleness check first, full reprocess only when something actually happened). Exports --export-xlsx with new-case rows highlighted green and updated-case rows highlighted yellow.")
     p.add_argument("--headed", action="store_true", help="Run the browser headed (debugging only).")
     p.add_argument("--proxy", default=None, help="Explicit proxy server (defaults to HTTPS_PROXY env var if set).")
     p.add_argument("--disable-tls12-workaround", action="store_true", help="Disable forcing Chromium to TLS 1.2 max. Only useful if you are NOT behind a TLS-intercepting proxy that mishandles TLS 1.3, and you need TLS 1.3.")
@@ -115,6 +117,46 @@ async def _main_async(args: argparse.Namespace) -> None:
                     "exported %s: HOT=%d WARM=%d COLD=%d SHORT_SALE=%d UNCLASSIFIED=%d",
                     args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"],
                     counts["POTENTIAL_SHORT_SALE"], counts["UNCLASSIFIED"],
+                )
+            checkpoint.close()
+        return
+
+    if args.update:
+        checkpoint = Checkpoint(args.checkpoint_db)
+        result_writer = ResultWriter(args.output)
+        review_writer = ReviewWriter(args.review_log)
+        throttle = Throttle(min_delay=args.min_delay, max_delay=args.max_delay)
+        try:
+            async with async_playwright() as p:
+                browser = await launch_browser(
+                    p,
+                    headless=not args.headed,
+                    proxy_server=args.proxy,
+                    disable_tls12_workaround=args.disable_tls12_workaround,
+                )
+                try:
+                    context = await new_context(browser)
+                    page = await context.new_page()
+                    stats = await run_update(
+                        page=page, context=context, throttle=throttle, towns=list(CT_TOWNS),
+                        checkpoint=checkpoint, result_writer=result_writer, review_writer=review_writer,
+                        case_status=args.case_status, property_type=args.property_type,
+                    )
+                finally:
+                    await browser.close()
+        finally:
+            result_writer.close()
+            review_writer.close()
+            if args.export_xlsx:
+                counts = export_to_xlsx(
+                    checkpoint.all_case_results(), args.export_xlsx,
+                    new_dockets=stats["new_dockets"], updated_dockets=stats["updated_dockets"],
+                )
+                logging.getLogger("ct_foreclosure_bot").info(
+                    "exported %s: HOT=%d WARM=%d COLD=%d SHORT_SALE=%d UNCLASSIFIED=%d  (new=%d updated=%d)",
+                    args.export_xlsx, counts["HOT"], counts["WARM"], counts["COLD"],
+                    counts["POTENTIAL_SHORT_SALE"], counts["UNCLASSIFIED"],
+                    len(stats["new_dockets"]), len(stats["updated_dockets"]),
                 )
             checkpoint.close()
         return
