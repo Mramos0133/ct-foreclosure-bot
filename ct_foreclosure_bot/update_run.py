@@ -48,6 +48,7 @@ MEANINGFUL_FIELDS = (
     "encumbrances_subsequent_to_lien", "case_summary", "owner_name",
     "focus_contact", "new_decision_maker_source_url",
     "default_failure_to_appear", "bankruptcy_stay_reopened",
+    "bankruptcy_filed_date", "bankruptcy_reopen_hot",
 )
 
 

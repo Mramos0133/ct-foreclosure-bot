@@ -11,7 +11,7 @@ recently filed worksheet in the docket.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 import re
 
@@ -35,6 +35,8 @@ class DocketAnalysis:
     default_failure_to_appear: bool = False
     bankruptcy_stay_reopened: bool = False
     bankruptcy_supporting_text: str = ""
+    bankruptcy_filed_date: date | None = None
+    reopen_motion_entry: DocketEntry | None = None  # first motion filed *after* the bankruptcy that re-opens judgment/resets Law Days -- see motions.REOPEN_AFTER_BANKRUPTCY_PATTERNS
     worksheet_entry: DocketEntry | None = None
     owner_name: str = ""
     return_of_service_doc_url: str | None = None
@@ -106,11 +108,14 @@ def analyze_docket(docket: DocketInfo) -> DocketAnalysis:
     bankruptcy_idx = [i for i, e in enumerate(entries) if is_bankruptcy_mention(e.description)]
     if bankruptcy_idx:
         first_bk = bankruptcy_idx[0]
+        parsed_bk_date = _parse_date(entries[first_bk].file_date)
+        analysis.bankruptcy_filed_date = parsed_bk_date.date() if parsed_bk_date else None
         reopen_entries = [
             e for e in entries[first_bk + 1:] if is_reopen_after_bankruptcy(e.description)
         ]
         if reopen_entries:
             analysis.bankruptcy_stay_reopened = True
+            analysis.reopen_motion_entry = reopen_entries[0]  # earliest motion filed after the bankruptcy that reopens/restarts the case
             supporting = [entries[first_bk]] + reopen_entries
             analysis.bankruptcy_supporting_text = " | ".join(
                 f"[{e.entry_no or e.file_date}] {e.file_date}: {e.description}" for e in supporting

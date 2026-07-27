@@ -23,7 +23,7 @@ from .checkpoint import Checkpoint
 from .docket import fetch_docket
 from .lead_ranking import (
     classify_case, decide_bucket, finalize_key_date,
-    finalize_judgment_granted, finalize_bankruptcy_chapter,
+    finalize_judgment_granted, finalize_bankruptcy_chapter, is_bankruptcy_reopen_hot,
 )
 from .models import CaseResult
 from .motions import is_extend_sale_date_or_law_day, is_granted
@@ -165,7 +165,7 @@ async def process_case(
         except Exception:  # noqa: BLE001
             log.exception("failed fetching bankruptcy document for %s", docket_no)
 
-    decide_bucket(ranking, analysis.bankruptcy_stay_reopened)
+    decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
 
     # Short-sale override: total debt plus subsequent-lien encumbrances
     # exceeding 85% of appraised value means there's little/no equity
@@ -184,6 +184,10 @@ async def process_case(
     case_summary = build_case_summary(
         docket.entries, ranking.key_date, ranking.key_date_label,
         ranking.bankruptcy_chapter, continuance_reasons,
+        bankruptcy_filed_date=ranking.bankruptcy_filed_date,
+        reopen_motion_entry=analysis.reopen_motion_entry,
+        bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,
+        today=today,
     )
 
     result = CaseResult(
@@ -217,6 +221,8 @@ async def process_case(
         key_date_label=ranking.key_date_label,
         days_to_key_date=ranking.days_to_key_date,
         bankruptcy_chapter=ranking.bankruptcy_chapter,
+        bankruptcy_filed_date=ranking.bankruptcy_filed_date.isoformat() if ranking.bankruptcy_filed_date else None,
+        bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,
         continuance_count=ranking.continuance_count,
         warm_cold_subflag=ranking.warm_cold_subflag,
         case_summary=case_summary,
@@ -328,12 +334,26 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
     new CaseResult with only case_summary changed.
     """
     docket = await fetch_docket(context, throttle, result.docket_no)
+    analysis = analyze_docket(docket)
     continuance_reasons = await _fetch_continuance_reasons(context, throttle, docket.entries, result.docket_no)
     key_date = date.fromisoformat(result.key_date) if result.key_date else None
+    today = date.today()
+    bankruptcy_reopen_hot = analysis.bankruptcy_stay_reopened and is_bankruptcy_reopen_hot(
+        analysis.bankruptcy_filed_date, today
+    )
     case_summary = build_case_summary(
         docket.entries, key_date, result.key_date_label, result.bankruptcy_chapter, continuance_reasons,
+        bankruptcy_filed_date=analysis.bankruptcy_filed_date,
+        reopen_motion_entry=analysis.reopen_motion_entry,
+        bankruptcy_reopen_hot=bankruptcy_reopen_hot,
+        today=today,
     )
-    return dataclasses.replace(result, case_summary=case_summary)
+    return dataclasses.replace(
+        result,
+        case_summary=case_summary,
+        bankruptcy_filed_date=analysis.bankruptcy_filed_date.isoformat() if analysis.bankruptcy_filed_date else None,
+        bankruptcy_reopen_hot=bankruptcy_reopen_hot,
+    )
 
 
 async def run_case_summary_backfill(

@@ -20,6 +20,7 @@ account of what happened.
 import re
 from datetime import date, datetime
 
+from .lead_ranking import months_between as _months_between
 from .models import DocketEntry
 from .motions import (
     find_target_motions,
@@ -70,6 +71,10 @@ def build_case_summary(
     bankruptcy_chapter: str | None,
     continuance_reasons: dict[str, str],
     recent_limit: int = RECENT_ACTIONS_LIMIT,
+    bankruptcy_filed_date: date | None = None,
+    reopen_motion_entry: DocketEntry | None = None,
+    bankruptcy_reopen_hot: bool = False,
+    today: date | None = None,
 ) -> str:
     """Return a "\\n"-joined bullet list: current status facts (auction
     date, bankruptcy chapter) first, then just the `recent_limit` most
@@ -81,6 +86,13 @@ def build_case_summary(
     entries the caller already OCR'd (see pipeline.py); entries not in
     the dict just get a plain "granted, no reason found in motion text"
     bullet rather than a fabricated one.
+
+    `bankruptcy_filed_date`/`reopen_motion_entry`/`bankruptcy_reopen_hot`
+    (see lead_ranking.py) get their own always-visible status line, same
+    as key_date/bankruptcy_chapter below -- the bankruptcy filing can
+    easily be older than the `recent_limit` cutoff below by the time this
+    matters (the whole point of the HOT rule is a 2-12 month-old filing),
+    so it can't rely on the recent-bullets loop to surface it.
     """
     bullets: list[tuple[datetime | None, str, str]] = []  # (sort_key, display_date, text)
 
@@ -131,6 +143,14 @@ def build_case_summary(
         lines.append(f"- {key_date_label} currently scheduled for {key_date.strftime('%m/%d/%Y')}")
     if bankruptcy_chapter:
         lines.append(f"- Bankruptcy Chapter {bankruptcy_chapter}")
+    if bankruptcy_filed_date:
+        months_ago = _months_between(bankruptcy_filed_date, today or date.today())
+        lines.append(f"- Bankruptcy filed {bankruptcy_filed_date.strftime('%m/%d/%Y')} ({months_ago} months ago)")
+    if reopen_motion_entry:
+        hot_note = " -- HOT: restarts foreclosure/auction process" if bankruptcy_reopen_hot else ""
+        lines.append(
+            f"- {reopen_motion_entry.file_date.strip()}: {reopen_motion_entry.description.strip()}{hot_note}"
+        )
     for _, display_date, text in recent:
         lines.append(f"- {display_date}: {text}")
     return "\n".join(lines)

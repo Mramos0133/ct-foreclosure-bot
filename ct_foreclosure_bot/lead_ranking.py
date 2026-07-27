@@ -7,24 +7,37 @@ Buckets and the reasoning behind each (as specified by the user):
           site. Cleanest, most time-sensitive lead: the legal outcome is
           locked in, there's no attorney contesting it, and it's not yet
           public-facing to every other investor watching the auction site.
+
+          ALSO HOT (per explicit request): bankruptcy was filed, and
+          *after* that a motion to open judgment / reset Law Days / any
+          other motion that restarts the foreclosure or auction process
+          was filed -- but only when the bankruptcy filing itself is
+          "fresh enough to matter, but not so fresh the case hasn't had
+          time to actually restart": 2-12 months before today. Outside
+          that window (bankruptcy filed <2 months ago, i.e. still likely
+          mid-stay, or >12 months ago, i.e. stale) it falls through to
+          WARM instead, same as before this rule existed.
   WARM -- a bankruptcy stay was filed and the judgment has since been
-          reopened. Real distress signal, but messier: another stay is
-          possible, and the owner has shown they're actively trying to
-          solve the problem (may already be talking to a bankruptcy
-          attorney or loss-mitigation rep). Chapter 7 (liquidation) vs.
-          Chapter 13 (repayment plan, may still be trying to keep the
-          house) changes the read on this case, so it's flagged.
+          reopened, but the bankruptcy filing date is outside the HOT
+          2-12-month window above (or couldn't be parsed). Real distress
+          signal, but messier: another stay is possible, and the owner
+          has shown they're actively trying to solve the problem (may
+          already be talking to a bankruptcy attorney or loss-mitigation
+          rep). Chapter 7 (liquidation) vs. Chapter 13 (repayment plan,
+          may still be trying to keep the house) changes the read on this
+          case, so it's flagged.
   COLD -- the sale/law day has been extended multiple times. Deprioritized
           by default (heavily shopped by every other investor watching the
           auction site), except for a sub-segment worth a second look:
           3+ extensions with no bankruptcy filed and no appearance --
           stalling without an apparent real workout in place.
 
-Bucket priority when a case could arguably fit more than one: WARM is
-checked first (bankruptcy fundamentally changes a case's trajectory, per
-the user's own reasoning above, so it takes precedence over a technically
-non-appearing/granted case), then COLD (multiple continuances mean it's
-already been shopped, regardless of appearance status), then HOT, else
+Bucket priority when a case could arguably fit more than one: the
+bankruptcy-then-reopened-within-2-12-months HOT rule is checked first (it
+is the single strongest distress + re-activation signal), then WARM for
+bankruptcy-then-reopened cases outside that window, then COLD (multiple
+continuances mean it's already been shopped, regardless of appearance
+status), then the original judgment/non-appearing HOT rule, else
 UNCLASSIFIED for a matched case that doesn't cleanly fit any of the three
 (most commonly: the judgment motion hasn't actually been granted yet, or
 a case with none of the distinguishing signals above).
@@ -37,6 +50,30 @@ from .models import DocketEntry, DocketInfo
 from .case_analysis import DocketAnalysis
 from .motions import find_target_motions, is_granted, is_extend_sale_date_or_law_day
 from .order_document import find_order_entry
+
+# Bankruptcy-then-reopened cases only count toward HOT when the bankruptcy
+# was filed within this many months of today -- see module docstring.
+BANKRUPTCY_REOPEN_HOT_MIN_MONTHS = 2
+BANKRUPTCY_REOPEN_HOT_MAX_MONTHS = 12
+
+
+def months_between(earlier: date, later: date) -> int:
+    """Whole calendar months elapsed from `earlier` to `later` (>= 0 when
+    `later` is on/after `earlier`). Day-of-month aware: a filing on the
+    27th doesn't count as "1 month ago" until the 27th of the next month,
+    not just the 1st.
+    """
+    months = (later.year - earlier.year) * 12 + (later.month - earlier.month)
+    if later.day < earlier.day:
+        months -= 1
+    return max(months, 0)
+
+
+def is_bankruptcy_reopen_hot(bankruptcy_filed_date: date | None, today: date) -> bool:
+    if bankruptcy_filed_date is None or bankruptcy_filed_date > today:
+        return False
+    months = months_between(bankruptcy_filed_date, today)
+    return BANKRUPTCY_REOPEN_HOT_MIN_MONTHS <= months <= BANKRUPTCY_REOPEN_HOT_MAX_MONTHS
 
 
 @dataclass
@@ -53,6 +90,8 @@ class RankingInfo:
     warm_cold_subflag: bool
     order_entry_for_key_date: DocketEntry | None  # so the caller knows which doc to OCR
     order_entry_for_bankruptcy: DocketEntry | None
+    bankruptcy_filed_date: date | None = None
+    bankruptcy_reopen_hot: bool = False  # bankruptcy-then-reopened AND within the 2-12 month HOT window
 
 
 def count_continuances(entries: list[DocketEntry]) -> int:
@@ -125,12 +164,13 @@ def classify_case(
         warm_cold_subflag=False,
         order_entry_for_key_date=order_entry_for_key_date,
         order_entry_for_bankruptcy=order_entry_for_bankruptcy,
+        bankruptcy_filed_date=analysis.bankruptcy_filed_date,
     )
-    decide_bucket(ranking, analysis.bankruptcy_stay_reopened)
+    decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
     return ranking
 
 
-def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool) -> None:
+def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: date) -> None:
     """(Re)derive lead_bucket and warm_cold_subflag from the ranking's
     current field values. Called once with the cheap docket-text-only
     signals, and again after finalize_judgment_granted()/finalize_key_date()
@@ -149,7 +189,13 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool) -> None:
     # for that.
     key_date_in_past = ranking.days_to_key_date is not None and ranking.days_to_key_date < 0
 
-    if bankruptcy_stay_reopened:
+    ranking.bankruptcy_reopen_hot = bankruptcy_stay_reopened and is_bankruptcy_reopen_hot(
+        ranking.bankruptcy_filed_date, today
+    )
+
+    if ranking.bankruptcy_reopen_hot:
+        ranking.lead_bucket = "HOT"
+    elif bankruptcy_stay_reopened:
         ranking.lead_bucket = "WARM"
     elif ranking.continuance_count >= 2:
         ranking.lead_bucket = "COLD"
