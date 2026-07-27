@@ -17,6 +17,19 @@ Buckets and the reasoning behind each (as specified by the user):
           that window (bankruptcy filed <2 months ago, i.e. still likely
           mid-stay, or >12 months ago, i.e. stale) it falls through to
           WARM instead, same as before this rule existed.
+
+          ALSO HOT (per explicit request, independent of the bankruptcy
+          rule above): the owner entered an EMAP or loan-modification
+          program, and *after* that the docket shows the most recent
+          motion of that type is a denial / motion to open judgment /
+          motion for judgment of foreclosure / or any other motion
+          signaling the program failed or lapsed and the foreclosure or
+          auction is moving again -- same idea as the bankruptcy rule,
+          just a different kind of stay. Only counts when the program was
+          entered 1-12 months before today. NOTE: the EMAP/loan-mod entry
+          detection is a best-effort pattern match (unlike the bankruptcy
+          patterns, which were confirmed against real dockets) -- see
+          motions.py.
   WARM -- a bankruptcy stay was filed and the judgment has since been
           reopened, but the bankruptcy filing date is outside the HOT
           2-12-month window above (or couldn't be parsed). Real distress
@@ -32,15 +45,17 @@ Buckets and the reasoning behind each (as specified by the user):
           3+ extensions with no bankruptcy filed and no appearance --
           stalling without an apparent real workout in place.
 
-Bucket priority when a case could arguably fit more than one: the
-bankruptcy-then-reopened-within-2-12-months HOT rule is checked first (it
-is the single strongest distress + re-activation signal), then WARM for
-bankruptcy-then-reopened cases outside that window, then COLD (multiple
-continuances mean it's already been shopped, regardless of appearance
-status), then the original judgment/non-appearing HOT rule, else
-UNCLASSIFIED for a matched case that doesn't cleanly fit any of the three
-(most commonly: the judgment motion hasn't actually been granted yet, or
-a case with none of the distinguishing signals above).
+Bucket priority when a case could arguably fit more than one: the two
+"stay-then-failed" HOT rules above (bankruptcy-then-reopened and
+EMAP/loan-mod-then-failed, each within their own month window) are
+checked first and are independent of each other -- either one alone is
+enough, and both can be true at once. Then WARM for bankruptcy-then-
+reopened cases outside the HOT window, then COLD (multiple continuances
+mean it's already been shopped, regardless of appearance status), then
+the original judgment/non-appearing HOT rule, else UNCLASSIFIED for a
+matched case that doesn't cleanly fit any of the three (most commonly:
+the judgment motion hasn't actually been granted yet, or a case with none
+of the distinguishing signals above).
 """
 
 from dataclasses import dataclass
@@ -55,6 +70,11 @@ from .order_document import find_order_entry
 # was filed within this many months of today -- see module docstring.
 BANKRUPTCY_REOPEN_HOT_MIN_MONTHS = 2
 BANKRUPTCY_REOPEN_HOT_MAX_MONTHS = 12
+
+# EMAP/loan-mod-then-failed cases only count toward HOT when the program
+# was entered within this many months of today -- see module docstring.
+ASSISTANCE_PROGRAM_HOT_MIN_MONTHS = 1
+ASSISTANCE_PROGRAM_HOT_MAX_MONTHS = 12
 
 
 def months_between(earlier: date, later: date) -> int:
@@ -76,6 +96,13 @@ def is_bankruptcy_reopen_hot(bankruptcy_filed_date: date | None, today: date) ->
     return BANKRUPTCY_REOPEN_HOT_MIN_MONTHS <= months <= BANKRUPTCY_REOPEN_HOT_MAX_MONTHS
 
 
+def is_assistance_program_hot(entered_date: date | None, today: date) -> bool:
+    if entered_date is None or entered_date > today:
+        return False
+    months = months_between(entered_date, today)
+    return ASSISTANCE_PROGRAM_HOT_MIN_MONTHS <= months <= ASSISTANCE_PROGRAM_HOT_MAX_MONTHS
+
+
 @dataclass
 class RankingInfo:
     lead_bucket: str
@@ -92,6 +119,10 @@ class RankingInfo:
     order_entry_for_bankruptcy: DocketEntry | None
     bankruptcy_filed_date: date | None = None
     bankruptcy_reopen_hot: bool = False  # bankruptcy-then-reopened AND within the 2-12 month HOT window
+    assistance_program_entered_date: date | None = None
+    assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
+    assistance_program_failure_present: bool = False  # a qualifying failure motion was found after the program entry (timing not yet checked)
+    assistance_program_hot: bool = False  # program-then-failed AND within the 1-12 month HOT window
 
 
 def count_continuances(entries: list[DocketEntry]) -> int:
@@ -165,6 +196,9 @@ def classify_case(
         order_entry_for_key_date=order_entry_for_key_date,
         order_entry_for_bankruptcy=order_entry_for_bankruptcy,
         bankruptcy_filed_date=analysis.bankruptcy_filed_date,
+        assistance_program_entered_date=analysis.assistance_program_entered_date,
+        assistance_program_label=analysis.assistance_program_label,
+        assistance_program_failure_present=analysis.assistance_program_failure_entry is not None,
     )
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
     return ranking
@@ -192,8 +226,11 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: d
     ranking.bankruptcy_reopen_hot = bankruptcy_stay_reopened and is_bankruptcy_reopen_hot(
         ranking.bankruptcy_filed_date, today
     )
+    ranking.assistance_program_hot = ranking.assistance_program_failure_present and is_assistance_program_hot(
+        ranking.assistance_program_entered_date, today
+    )
 
-    if ranking.bankruptcy_reopen_hot:
+    if ranking.bankruptcy_reopen_hot or ranking.assistance_program_hot:
         ranking.lead_bucket = "HOT"
     elif bankruptcy_stay_reopened:
         ranking.lead_bucket = "WARM"

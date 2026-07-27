@@ -49,6 +49,7 @@ MEANINGFUL_FIELDS = (
     "focus_contact", "new_decision_maker_source_url",
     "default_failure_to_appear", "bankruptcy_stay_reopened",
     "bankruptcy_filed_date", "bankruptcy_reopen_hot",
+    "assistance_program_label", "assistance_program_entered_date", "assistance_program_hot",
 )
 
 

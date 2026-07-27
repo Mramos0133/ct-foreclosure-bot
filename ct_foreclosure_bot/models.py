@@ -80,6 +80,9 @@ class CaseResult:
     bankruptcy_chapter: str | None = None  # "7" | "13" | etc., WARM/HOT-via-bankruptcy cases only
     bankruptcy_filed_date: str | None = None  # ISO format, date of the first bankruptcy-mention docket entry
     bankruptcy_reopen_hot: bool = False  # bankruptcy filed, then reopened/restarted, within the 2-12 month HOT window -- see lead_ranking.py
+    assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
+    assistance_program_entered_date: str | None = None  # ISO format, date of the first EMAP/loan-mod docket entry
+    assistance_program_hot: bool = False  # program entered, then failed/lapsed, within the 1-12 month HOT window -- see lead_ranking.py
     continuance_count: int = 0
     warm_cold_subflag: bool = False  # COLD sub-segment: 3+ continuances, no bankruptcy, non-appearing
     # Contact-tracing fields (see case_analysis.py: Return of Service,

@@ -23,7 +23,8 @@ from .checkpoint import Checkpoint
 from .docket import fetch_docket
 from .lead_ranking import (
     classify_case, decide_bucket, finalize_key_date,
-    finalize_judgment_granted, finalize_bankruptcy_chapter, is_bankruptcy_reopen_hot,
+    finalize_judgment_granted, finalize_bankruptcy_chapter,
+    is_bankruptcy_reopen_hot, is_assistance_program_hot,
 )
 from .models import CaseResult
 from .motions import is_extend_sale_date_or_law_day, is_granted
@@ -187,6 +188,10 @@ async def process_case(
         bankruptcy_filed_date=ranking.bankruptcy_filed_date,
         reopen_motion_entry=analysis.reopen_motion_entry,
         bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,
+        assistance_program_entered_date=ranking.assistance_program_entered_date,
+        assistance_program_label=ranking.assistance_program_label,
+        assistance_program_failure_entry=analysis.assistance_program_failure_entry,
+        assistance_program_hot=ranking.assistance_program_hot,
         today=today,
     )
 
@@ -223,6 +228,12 @@ async def process_case(
         bankruptcy_chapter=ranking.bankruptcy_chapter,
         bankruptcy_filed_date=ranking.bankruptcy_filed_date.isoformat() if ranking.bankruptcy_filed_date else None,
         bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,
+        assistance_program_label=ranking.assistance_program_label,
+        assistance_program_entered_date=(
+            ranking.assistance_program_entered_date.isoformat()
+            if ranking.assistance_program_entered_date else None
+        ),
+        assistance_program_hot=ranking.assistance_program_hot,
         continuance_count=ranking.continuance_count,
         warm_cold_subflag=ranking.warm_cold_subflag,
         case_summary=case_summary,
@@ -341,11 +352,18 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
     bankruptcy_reopen_hot = analysis.bankruptcy_stay_reopened and is_bankruptcy_reopen_hot(
         analysis.bankruptcy_filed_date, today
     )
+    assistance_program_hot = analysis.assistance_program_failure_entry is not None and is_assistance_program_hot(
+        analysis.assistance_program_entered_date, today
+    )
     case_summary = build_case_summary(
         docket.entries, key_date, result.key_date_label, result.bankruptcy_chapter, continuance_reasons,
         bankruptcy_filed_date=analysis.bankruptcy_filed_date,
         reopen_motion_entry=analysis.reopen_motion_entry,
         bankruptcy_reopen_hot=bankruptcy_reopen_hot,
+        assistance_program_entered_date=analysis.assistance_program_entered_date,
+        assistance_program_label=analysis.assistance_program_label,
+        assistance_program_failure_entry=analysis.assistance_program_failure_entry,
+        assistance_program_hot=assistance_program_hot,
         today=today,
     )
     return dataclasses.replace(
@@ -353,6 +371,12 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
         case_summary=case_summary,
         bankruptcy_filed_date=analysis.bankruptcy_filed_date.isoformat() if analysis.bankruptcy_filed_date else None,
         bankruptcy_reopen_hot=bankruptcy_reopen_hot,
+        assistance_program_label=analysis.assistance_program_label,
+        assistance_program_entered_date=(
+            analysis.assistance_program_entered_date.isoformat()
+            if analysis.assistance_program_entered_date else None
+        ),
+        assistance_program_hot=assistance_program_hot,
     )
 
 

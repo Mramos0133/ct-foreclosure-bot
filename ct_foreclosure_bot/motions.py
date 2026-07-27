@@ -83,6 +83,58 @@ def is_reopen_after_bankruptcy(entry_text: str) -> bool:
     return any(p.search(norm) for p in REOPEN_AFTER_BANKRUPTCY_PATTERNS)
 
 
+# EMAP-or-loan-modification-then-failed detection, same two-part shape as
+# the bankruptcy-then-reopened detection above: a docket entry showing the
+# owner entered the program, followed anywhere after it by an entry that
+# signals the program didn't stick and the foreclosure/auction is moving
+# again. NOTE: unlike the bankruptcy patterns above (confirmed against
+# real dockets), these EMAP/loan-mod phrasings are a best-effort guess at
+# how CT's civilinquiry docket actually labels these entries -- flag any
+# case caught by this rule for a quick human sanity-check against the
+# real docket text until that's confirmed.
+EMAP_PATTERN = re.compile(r"\bEMAP\b|EMERGENCY\s+MORTGAGE\s+ASSISTANCE")
+LOAN_MODIFICATION_PROGRAM_PATTERN = re.compile(
+    r"LOAN\s+MODIFICATION|FORECLOSURE\s+MEDIATION|LOSS\s+MITIGATION"
+)
+
+# A few EMAP/loan-mod-specific failure signals beyond the ones already
+# covered by find_target_motions() (Motion for Judgment-Strict/By Sale,
+# Motion to Open Judgment, Law Day) and is_reopen_after_bankruptcy()
+# (Reset Law Days / Reopen) -- both of those are reused below since "the
+# case is moving toward foreclosure/auction again" means the same thing
+# regardless of whether a bankruptcy or an EMAP/loan-mod stay preceded it.
+PROGRAM_FAILURE_PATTERN = re.compile(
+    r"MOTION\s+TO\s+DENY"
+    r"|\bDENIED\b"
+    r"|MOTION\s+TO\s+RESUME"
+    r"|MOTION\s+TO\s+REACTIVATE"
+    r"|MEDIATION\s+(PERIOD\s+)?(CLOSED|TERMINATED|ENDED)"
+    r"|EMAP\s+(APPLICATION\s+)?DENIED"
+)
+
+
+def program_entry_label(entry_text: str) -> str | None:
+    """"EMAP" | "Loan Modification" | None for one docket entry -- first
+    match wins if an entry text somehow contains both phrasings.
+    """
+    norm = normalize(entry_text)
+    if EMAP_PATTERN.search(norm):
+        return "EMAP"
+    if LOAN_MODIFICATION_PROGRAM_PATTERN.search(norm):
+        return "Loan Modification"
+    return None
+
+
+def is_assistance_program_entry(entry_text: str) -> bool:
+    return program_entry_label(entry_text) is not None
+
+
+def is_program_failure_motion(entry_text: str) -> bool:
+    if find_target_motions(entry_text) or is_reopen_after_bankruptcy(entry_text):
+        return True
+    return bool(PROGRAM_FAILURE_PATTERN.search(normalize(entry_text)))
+
+
 # "MOTION TO OPEN JUDGMENT AND EXTEND THE SALE DATE" is the observed real
 # phrasing for a sale-date continuance (confirmed on a real docket, granted
 # and denied instances both seen). Matched loosely (EXTEND + SALE DATE

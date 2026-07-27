@@ -74,6 +74,10 @@ def build_case_summary(
     bankruptcy_filed_date: date | None = None,
     reopen_motion_entry: DocketEntry | None = None,
     bankruptcy_reopen_hot: bool = False,
+    assistance_program_entered_date: date | None = None,
+    assistance_program_label: str | None = None,
+    assistance_program_failure_entry: DocketEntry | None = None,
+    assistance_program_hot: bool = False,
     today: date | None = None,
 ) -> str:
     """Return a "\\n"-joined bullet list: current status facts (auction
@@ -88,11 +92,12 @@ def build_case_summary(
     bullet rather than a fabricated one.
 
     `bankruptcy_filed_date`/`reopen_motion_entry`/`bankruptcy_reopen_hot`
-    (see lead_ranking.py) get their own always-visible status line, same
-    as key_date/bankruptcy_chapter below -- the bankruptcy filing can
-    easily be older than the `recent_limit` cutoff below by the time this
-    matters (the whole point of the HOT rule is a 2-12 month-old filing),
-    so it can't rely on the recent-bullets loop to surface it.
+    and their EMAP/loan-mod counterparts (see lead_ranking.py) each get
+    their own always-visible status line, same as key_date/
+    bankruptcy_chapter below -- the triggering filing can easily be older
+    than the `recent_limit` cutoff below by the time this matters (the
+    whole point of these HOT rules is a several-month-old filing), so it
+    can't rely on the recent-bullets loop to surface it.
     """
     bullets: list[tuple[datetime | None, str, str]] = []  # (sort_key, display_date, text)
 
@@ -150,6 +155,19 @@ def build_case_summary(
         hot_note = " -- HOT: restarts foreclosure/auction process" if bankruptcy_reopen_hot else ""
         lines.append(
             f"- {reopen_motion_entry.file_date.strip()}: {reopen_motion_entry.description.strip()}{hot_note}"
+        )
+    if assistance_program_entered_date and assistance_program_label:
+        months_ago = _months_between(assistance_program_entered_date, today or date.today())
+        lines.append(
+            f"- Entered {assistance_program_label} {assistance_program_entered_date.strftime('%m/%d/%Y')} ({months_ago} months ago)"
+        )
+    if assistance_program_failure_entry:
+        hot_note = (
+            " -- HOT: program failed/expired, foreclosure continuing" if assistance_program_hot else ""
+        )
+        lines.append(
+            f"- {assistance_program_failure_entry.file_date.strip()}: "
+            f"{assistance_program_failure_entry.description.strip()}{hot_note}"
         )
     for _, display_date, text in recent:
         lines.append(f"- {display_date}: {text}")

@@ -25,6 +25,9 @@ from .motions import (
     is_return_of_service,
     is_appearance_entry,
     is_substitute_party_motion,
+    is_assistance_program_entry,
+    is_program_failure_motion,
+    program_entry_label,
 )
 
 
@@ -37,6 +40,10 @@ class DocketAnalysis:
     bankruptcy_supporting_text: str = ""
     bankruptcy_filed_date: date | None = None
     reopen_motion_entry: DocketEntry | None = None  # first motion filed *after* the bankruptcy that re-opens judgment/resets Law Days -- see motions.REOPEN_AFTER_BANKRUPTCY_PATTERNS
+    assistance_program_entered_date: date | None = None
+    assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
+    assistance_program_failure_entry: DocketEntry | None = None  # most recent motion filed *after* the program entry signaling it failed/expired -- see motions.is_program_failure_motion
+    assistance_program_supporting_text: str = ""
     worksheet_entry: DocketEntry | None = None
     owner_name: str = ""
     return_of_service_doc_url: str | None = None
@@ -118,6 +125,29 @@ def analyze_docket(docket: DocketInfo) -> DocketAnalysis:
             analysis.reopen_motion_entry = reopen_entries[0]  # earliest motion filed after the bankruptcy that reopens/restarts the case
             supporting = [entries[first_bk]] + reopen_entries
             analysis.bankruptcy_supporting_text = " | ".join(
+                f"[{e.entry_no or e.file_date}] {e.file_date}: {e.description}" for e in supporting
+            )
+
+    program_idx = [i for i, e in enumerate(entries) if is_assistance_program_entry(e.description)]
+    if program_idx:
+        first_prog = program_idx[0]
+        parsed_prog_date = _parse_date(entries[first_prog].file_date)
+        analysis.assistance_program_entered_date = parsed_prog_date.date() if parsed_prog_date else None
+        analysis.assistance_program_label = program_entry_label(entries[first_prog].description)
+        failure_entries = [
+            e for e in entries[first_prog + 1:] if is_program_failure_motion(e.description)
+        ]
+        if failure_entries:
+            # "Most recent" per explicit request (as opposed to the
+            # bankruptcy-reopen rule above, which anchors on the
+            # *earliest* reopening motion) -- latest by parsed file date,
+            # falling back to last-in-docket-order when a date can't be
+            # parsed.
+            analysis.assistance_program_failure_entry = max(
+                failure_entries, key=lambda e: _parse_date(e.file_date) or datetime.min
+            )
+            supporting = [entries[first_prog], analysis.assistance_program_failure_entry]
+            analysis.assistance_program_supporting_text = " | ".join(
                 f"[{e.entry_no or e.file_date}] {e.file_date}: {e.description}" for e in supporting
             )
 
