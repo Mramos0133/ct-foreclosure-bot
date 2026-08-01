@@ -1,10 +1,26 @@
-"""Builds a single-sheet ranked Excel workbook from scraped listings.
+"""Builds a ranked, multi-sheet Excel workbook from scraped listings.
 
-Ranked by equity_estimate (assessed value minus final judgment) descending
--- a rough "biggest cushion first" ordering, same spirit as the CT bot's
-lead ranking but far simpler since this data source doesn't expose case
-motions/status the way a docket does. Listings with no equity_estimate
-(missing assessed value or final judgment) sort last, not dropped.
+Sheets, in tab order (per explicit request -- the active/upcoming
+auctions are the actionable leads, so they come first and aren't mixed
+in with the noise of already-decided ones):
+
+  ACTIVE    -- anything not yet sold or canceled: scheduled/waiting/
+               running auctions. Sorted soonest auction date first, then
+               biggest equity cushion first within a date.
+  SOLD      -- status "Sold". Useful as comp/outcome data.
+  CANCELED  -- status contains "cancel" (e.g. "Canceled per Order",
+               "Canceled per Bankruptcy"). Kept for reference; a
+               canceled sale can also signal a workout/short-sale
+               conversation happening -- but per explicit request these
+               are out of the main view.
+
+Bucketing keys off the auction_status text since that's all this data
+source exposes (no docket detail here, unlike the CT bot). An empty or
+unrecognized status lands in ACTIVE rather than being hidden away --
+better to over-show than silently bury a live lead.
+
+equity_estimate (assessed value minus final judgment) drives the
+within-date ranking; rows missing either figure sort last, not dropped.
 """
 
 from __future__ import annotations
@@ -37,31 +53,64 @@ COLUMNS = [
 ]
 
 
-def _sort_key(r: AuctionListing):
+SHEET_ORDER = ["ACTIVE", "SOLD", "CANCELED"]
+
+
+def bucket_for(r: AuctionListing) -> str:
+    status = r.auction_status.strip().lower()
+    if status == "sold":
+        return "SOLD"
+    if "cancel" in status:
+        return "CANCELED"
+    return "ACTIVE"
+
+
+def _sort_key_active(r: AuctionListing):
+    equity = r.equity_estimate
+    return (r.auction_date, equity is None, -(equity or 0))
+
+
+def _sort_key_decided(r: AuctionListing):
     equity = r.equity_estimate
     return (equity is None, -(equity or 0))
 
 
+SORT_KEYS = {
+    "ACTIVE": _sort_key_active,
+    "SOLD": _sort_key_decided,
+    "CANCELED": _sort_key_decided,
+}
+
+
 def build_workbook(results: list[AuctionListing]) -> Workbook:
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Auction Listings"
+    wb.remove(wb.active)  # default blank sheet
 
-    for col_idx, (header, _) in enumerate(COLUMNS, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
-        cell.font = Font(bold=True)
+    by_bucket: dict[str, list[AuctionListing]] = {b: [] for b in SHEET_ORDER}
+    for r in results:
+        by_bucket[bucket_for(r)].append(r)
 
-    for row_idx, result in enumerate(sorted(results, key=_sort_key), start=2):
-        for col_idx, (_, getter) in enumerate(COLUMNS, start=1):
-            ws.cell(row=row_idx, column=col_idx, value=getter(result))
+    for bucket in SHEET_ORDER:
+        ws = wb.create_sheet(title=bucket)
+        for col_idx, (header, _) in enumerate(COLUMNS, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = Font(bold=True)
 
-    for col_idx in range(1, len(COLUMNS) + 1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = 22
-    ws.freeze_panes = "A2"
+        rows = sorted(by_bucket[bucket], key=SORT_KEYS[bucket])
+        for row_idx, result in enumerate(rows, start=2):
+            for col_idx, (_, getter) in enumerate(COLUMNS, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=getter(result))
+
+        for col_idx in range(1, len(COLUMNS) + 1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 22
+        ws.freeze_panes = "A2"
     return wb
 
 
-def export_to_xlsx(results: list[AuctionListing], output_path: str) -> int:
+def export_to_xlsx(results: list[AuctionListing], output_path: str) -> dict[str, int]:
     wb = build_workbook(results)
     wb.save(output_path)
-    return len(results)
+    counts = {b: 0 for b in SHEET_ORDER}
+    for r in results:
+        counts[bucket_for(r)] += 1
+    return counts

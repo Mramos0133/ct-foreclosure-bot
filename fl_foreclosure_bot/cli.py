@@ -113,8 +113,11 @@ async def _main_async(args: argparse.Namespace) -> None:
     finally:
         result_writer.close()
         if args.export_xlsx:
-            n = export_to_xlsx(all_results, args.export_xlsx)
-            log.info("exported %s: %d listings", args.export_xlsx, n)
+            counts = export_to_xlsx(all_results, args.export_xlsx)
+            log.info(
+                "exported %s: ACTIVE=%d SOLD=%d CANCELED=%d",
+                args.export_xlsx, counts["ACTIVE"], counts["SOLD"], counts["CANCELED"],
+            )
 
 
 def main() -> None:
