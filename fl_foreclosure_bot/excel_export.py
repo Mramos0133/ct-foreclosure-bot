@@ -36,6 +36,7 @@ COLUMNS = [
     ("Auction Date", lambda r: r.auction_date),
     ("Section", lambda r: r.section),
     ("Auction Status", lambda r: r.auction_status),
+    ("Auction Start Time", lambda r: r.auction_start_time or ""),
     ("Sold Date/Time", lambda r: r.sold_date_time or ""),
     ("Sold Amount", lambda r: r.sold_amount if r.sold_amount is not None else ""),
     ("Sold To", lambda r: r.sold_to or ""),

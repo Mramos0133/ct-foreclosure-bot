@@ -76,6 +76,9 @@ from .throttle import Throttle
 log = logging.getLogger("fl_foreclosure_bot")
 
 _MONEY_RE = r"\$?\s*([\d,]+\.\d{2})"
+# "07/08/2026 10:03 AM ET" (sold cards) / "08/03/2026 09:00 AM ET"
+# (scheduled cards) -- both confirmed on real screenshots.
+_DATETIME_RE = r"([\d/]{6,10}\s+[\d:]{3,5}\s*[AP]M(?:\s*ET)?)"
 
 
 def build_url(base_url: str, auction_date: date) -> str:
@@ -125,19 +128,32 @@ def _parse_block(
     source_url: str,
     anchors: dict[str, str],
 ) -> AuctionListing | None:
+    # Three confirmed left-block shapes (all from real screenshots):
+    #   "Auction Sold <datetime> Amount: $N Sold To: X"  -- completed sale
+    #   "Auction Status <free text>"                     -- canceled/etc.
+    #   "Auction Starts <datetime>"                      -- UPCOMING auction.
+    # The third was only discovered from a user's screenshots after two
+    # real runs silently under-counted: the card splitter didn't know
+    # "Auction Starts", so every waiting auction on a page merged into
+    # one block and only its first case survived parsing.
     is_sold = bool(re.match(r"Auction\s+Sold", block, re.I))
+    is_scheduled = bool(re.match(r"Auction\s+Starts", block, re.I))
 
-    sold_date_time = sold_amount = sold_to = None
+    sold_date_time = sold_amount = sold_to = auction_start_time = None
     auction_status = ""
 
     if is_sold:
         auction_status = "Sold"
-        m = re.search(r"Auction\s+Sold\s*([\d/]{6,10}\s+[\d:]{3,5}\s*[AP]M\s*ET)", block, re.I)
+        m = re.search(r"Auction\s+Sold\s*" + _DATETIME_RE, block, re.I)
         sold_date_time = m.group(1).strip() if m else None
         m = re.search(r"Amount:\s*" + _MONEY_RE, block, re.I)
         sold_amount = _parse_money(m.group(1)) if m else None
         m = re.search(r"Sold\s*To:\s*(.+?)\s*Auction\s*Type:", block, re.I | re.S)
         sold_to = m.group(1).strip() if m else None
+    elif is_scheduled:
+        auction_status = "Scheduled"
+        m = re.search(r"Auction\s+Starts\s*" + _DATETIME_RE, block, re.I)
+        auction_start_time = m.group(1).strip() if m else None
     else:
         m = re.search(r"Auction\s*Status\s*(.+?)\s*Auction\s*Type:", block, re.I | re.S)
         auction_status = m.group(1).strip() if m else ""
@@ -155,6 +171,13 @@ def _parse_block(
 
     m = re.search(r"Parcel\s*ID:\s*(\S+)", block, re.I)
     parcel_id = m.group(1).strip() if m else None
+    # Confirmed on a real card: some listings have no parcel number at all
+    # -- the Parcel ID line just links the words "Property Appraiser".
+    # Don't record the word "Property" as a parcel ID (and don't look up
+    # its anchor -- the left nav has its own unrelated "Property
+    # Appraiser" link that would wrongly match).
+    if parcel_id and parcel_id.lower() in ("property", "appraiser"):
+        parcel_id = None
 
     m = re.search(
         r"Property\s*Address:\s*(.+?)\s*(?:Assessed\s*Value:|Plaintiff\s*Max\s*Bid:)",
@@ -173,6 +196,7 @@ def _parse_block(
         auction_date=auction_date_iso,
         section=section,
         auction_status=auction_status,
+        auction_start_time=auction_start_time,
         sold_date_time=sold_date_time,
         sold_amount=sold_amount,
         sold_to=sold_to,
@@ -197,7 +221,7 @@ def _parse_section(
     source_url: str,
     anchors: dict[str, str],
 ) -> list[AuctionListing]:
-    blocks = re.split(r"(?=Auction\s+(?:Status|Sold)\b)", section_text, flags=re.I)
+    blocks = re.split(r"(?=Auction\s+(?:Status|Sold|Starts)\b)", section_text, flags=re.I)
     results = []
     for block in blocks:
         if not re.search(r"Case\s*#:", block, re.I):
@@ -284,6 +308,7 @@ _NEXT_CONTROL_SELECTORS = [
     "[class*='pgnext' i]",
     "img[alt*='next' i]",
     "input[type='image'][alt*='next' i]",
+    "input[value*='NEXT' i]",  # text-filter below can't see input values
 ]
 
 # Cheap textual hint that a pager exists at all, so quiet dates (most of

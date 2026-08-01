@@ -18,8 +18,8 @@ class AuctionListing:
     """
     county: str  # "Miami-Dade" | "Broward"
     auction_date: str  # ISO "YYYY-MM-DD"
-    section: str  # "Running" | "Closed or Canceled"
-    auction_status: str  # e.g. "Sold", "Canceled per Order", "Canceled per Bankruptcy"
+    section: str  # "Running" | "Waiting" | "Closed or Canceled" | "Unknown"
+    auction_status: str  # e.g. "Scheduled" (upcoming), "Sold", "Canceled per Order", "Canceled per Bankruptcy"
     sold_date_time: str | None  # raw display text, only present when auction_status == "Sold"
     sold_amount: float | None
     sold_to: str | None
@@ -33,6 +33,7 @@ class AuctionListing:
     assessed_value: float | None  # not always present (confirmed absent on a real Broward card)
     plaintiff_max_bid: str
     source_url: str  # the auction-date page URL this listing was scraped from
+    auction_start_time: str | None = None  # raw display text (e.g. "08/03/2026 09:00 AM ET"), upcoming ("Auction Starts") cards only
 
     @property
     def equity_estimate(self) -> float | None:
