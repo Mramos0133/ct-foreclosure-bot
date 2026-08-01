@@ -28,6 +28,8 @@ from .motions import (
     is_assistance_program_entry,
     is_program_failure_motion,
     program_entry_label,
+    is_complaint_entry,
+    is_lender_plaintiff,
 )
 
 
@@ -44,6 +46,9 @@ class DocketAnalysis:
     assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
     assistance_program_failure_entry: DocketEntry | None = None  # most recent motion filed *after* the program entry signaling it failed/expired -- see motions.is_program_failure_motion
     assistance_program_supporting_text: str = ""
+    complaint_entry: DocketEntry | None = None  # earliest COMPLAINT docket entry -- see motions.is_complaint_entry
+    complaint_filed_date: date | None = None  # date of that entry; falls back to the earliest docket entry's date (case start) when no COMPLAINT entry is labeled
+    lender_plaintiff: bool = False  # plaintiff caption reads like a bank/lender -- see motions.is_lender_plaintiff
     worksheet_entry: DocketEntry | None = None
     owner_name: str = ""
     return_of_service_doc_url: str | None = None
@@ -150,6 +155,22 @@ def analyze_docket(docket: DocketInfo) -> DocketAnalysis:
             analysis.assistance_program_supporting_text = " | ".join(
                 f"[{e.entry_no or e.file_date}] {e.file_date}: {e.description}" for e in supporting
             )
+
+    analysis.lender_plaintiff = is_lender_plaintiff(docket.case_caption)
+    complaint_entries = [e for e in entries if is_complaint_entry(e.description)]
+    if complaint_entries:
+        analysis.complaint_entry = min(
+            complaint_entries, key=lambda e: _parse_date(e.file_date) or datetime.max
+        )
+        parsed_complaint = _parse_date(analysis.complaint_entry.file_date)
+        analysis.complaint_filed_date = parsed_complaint.date() if parsed_complaint else None
+    elif entries:
+        # No labeled COMPLAINT entry -- use the earliest docket entry's
+        # date as the case-start proxy (still what "when was this filed"
+        # means for recency), but leave complaint_entry None so nothing
+        # tries to OCR a document that isn't actually the complaint.
+        earliest = min((_parse_date(e.file_date) for e in entries if _parse_date(e.file_date)), default=None)
+        analysis.complaint_filed_date = earliest.date() if earliest else None
 
     analysis.worksheet_entry = _pick_worksheet(entries, analysis.matched_motion_entries)
 

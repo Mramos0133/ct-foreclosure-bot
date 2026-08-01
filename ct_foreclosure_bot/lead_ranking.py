@@ -30,6 +30,18 @@ Buckets and the reasoning behind each (as specified by the user):
           detection is a best-effort pattern match (unlike the bankruptcy
           patterns, which were confirmed against real dockets) -- see
           motions.py.
+
+          ALSO HOT (per explicit request): a bank/lender filed the
+          foreclosure complaint recently -- within the last
+          RECENT_COMPLAINT_HOT_MAX_MONTHS (6) months. This is the
+          earliest-stage lead type: no judgment motion needs to exist
+          yet (it's the only rule that can match a case with no target
+          motion at all -- see pipeline.process_case), the owner has
+          just been served, and no other investor watching judgments or
+          the auction site has seen it. The complaint document is OCR'd
+          for the principal balance owed and the date since which P&I
+          has gone unpaid (see complaint_document.py); both go on the
+          spreadsheet row.
   WARM -- a bankruptcy stay was filed and the judgment has since been
           reopened, but the bankruptcy filing date is outside the HOT
           2-12-month window above (or couldn't be parsed). Real distress
@@ -76,6 +88,14 @@ BANKRUPTCY_REOPEN_HOT_MAX_MONTHS = 12
 ASSISTANCE_PROGRAM_HOT_MIN_MONTHS = 1
 ASSISTANCE_PROGRAM_HOT_MAX_MONTHS = 12
 
+# A bank/lender-filed complaint counts as "recent" (and therefore HOT --
+# see module docstring) when filed within this many months of today. Six
+# months keeps the definition of "recent" generous enough to cover the
+# pre-judgment window of a typical CT foreclosure (service, appearance,
+# mediation referral all happen inside it) while excluding cases old
+# enough that the complaint itself is no longer news to the owner.
+RECENT_COMPLAINT_HOT_MAX_MONTHS = 6
+
 
 def months_between(earlier: date, later: date) -> int:
     """Whole calendar months elapsed from `earlier` to `later` (>= 0 when
@@ -103,6 +123,12 @@ def is_assistance_program_hot(entered_date: date | None, today: date) -> bool:
     return ASSISTANCE_PROGRAM_HOT_MIN_MONTHS <= months <= ASSISTANCE_PROGRAM_HOT_MAX_MONTHS
 
 
+def is_recent_complaint_hot(complaint_filed_date: date | None, lender_plaintiff: bool, today: date) -> bool:
+    if not lender_plaintiff or complaint_filed_date is None or complaint_filed_date > today:
+        return False
+    return months_between(complaint_filed_date, today) <= RECENT_COMPLAINT_HOT_MAX_MONTHS
+
+
 @dataclass
 class RankingInfo:
     lead_bucket: str
@@ -123,6 +149,9 @@ class RankingInfo:
     assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
     assistance_program_failure_present: bool = False  # a qualifying failure motion was found after the program entry (timing not yet checked)
     assistance_program_hot: bool = False  # program-then-failed AND within the 1-12 month HOT window
+    complaint_filed_date: date | None = None
+    lender_plaintiff: bool = False
+    recent_complaint_hot: bool = False  # lender-filed complaint within the 6-month HOT window
 
 
 def count_continuances(entries: list[DocketEntry]) -> int:
@@ -199,6 +228,8 @@ def classify_case(
         assistance_program_entered_date=analysis.assistance_program_entered_date,
         assistance_program_label=analysis.assistance_program_label,
         assistance_program_failure_present=analysis.assistance_program_failure_entry is not None,
+        complaint_filed_date=analysis.complaint_filed_date,
+        lender_plaintiff=analysis.lender_plaintiff,
     )
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
     return ranking
@@ -229,8 +260,11 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: d
     ranking.assistance_program_hot = ranking.assistance_program_failure_present and is_assistance_program_hot(
         ranking.assistance_program_entered_date, today
     )
+    ranking.recent_complaint_hot = is_recent_complaint_hot(
+        ranking.complaint_filed_date, ranking.lender_plaintiff, today
+    )
 
-    if ranking.bankruptcy_reopen_hot or ranking.assistance_program_hot:
+    if ranking.bankruptcy_reopen_hot or ranking.assistance_program_hot or ranking.recent_complaint_hot:
         ranking.lead_bucket = "HOT"
     elif bankruptcy_stay_reopened:
         ranking.lead_bucket = "WARM"

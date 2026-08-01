@@ -105,6 +105,27 @@ class Checkpoint:
             )
         self._conn.commit()
 
+    def clear_unmatched_dockets(self, docket_like: list[str]) -> int:
+        """Forget processed-but-unmatched dockets whose docket_no matches
+        any of the given SQL LIKE patterns, so the next run re-examines
+        them. Needed when the *match rules themselves* widen (e.g. the
+        recent-lender-complaint rule): per-docket dedup otherwise
+        guarantees a previously-skipped case is never looked at again,
+        which is exactly wrong after a rule change. Matched dockets are
+        never cleared -- their stored results survive rule changes and
+        get rechecked through the normal update path instead. Returns
+        the number of dockets cleared.
+        """
+        if not docket_like:
+            return 0
+        where = " OR ".join("docket_no LIKE ?" for _ in docket_like)
+        cur = self._conn.execute(
+            f"DELETE FROM processed_dockets WHERE matched = 0 AND ({where})",
+            docket_like,
+        )
+        self._conn.commit()
+        return cur.rowcount
+
     def clear_completed_towns(self) -> None:
         """Reset town-level bookkeeping so a run re-walks every town's
         search results (to discover newly-filed cases), while leaving

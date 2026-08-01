@@ -35,9 +35,12 @@ override.
 ## Lead classification rules
 
 See the module docstring in `lead_ranking.py` for the full HOT/WARM/COLD
-bucket logic, including the two independent "stay-then-failed" HOT rules
-(bankruptcy-then-reopened within 2-12 months, and EMAP/loan-mod-then-
-failed within 1-12 months).
+bucket logic, including the three independent extra HOT rules:
+bankruptcy-then-reopened within 2-12 months, EMAP/loan-mod-then-failed
+within 1-12 months, and recent-lender-complaint within 6 months (the
+only rule that matches cases with no target motion at all -- complaint-
+stage cases; their complaint PDF is OCR'd for principal owed and the
+P&I-unpaid-since date, see `complaint_document.py`).
 
 Note: the EMAP/loan-mod docket-entry phrasing patterns in `motions.py`
 are a best-effort guess, not yet confirmed against real docket text like

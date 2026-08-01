@@ -21,10 +21,13 @@ from .case_analysis import analyze_docket
 from .case_summary import build_case_summary, extract_continuance_reason
 from .checkpoint import Checkpoint
 from .docket import fetch_docket
+from .complaint_document import (
+    fetch_complaint_text, extract_principal_amount, extract_unpaid_since,
+)
 from .lead_ranking import (
     classify_case, decide_bucket, finalize_key_date,
     finalize_judgment_granted, finalize_bankruptcy_chapter,
-    is_bankruptcy_reopen_hot, is_assistance_program_hot,
+    is_bankruptcy_reopen_hot, is_assistance_program_hot, is_recent_complaint_hot,
 )
 from .models import CaseResult
 from .motions import is_extend_sale_date_or_law_day, is_granted
@@ -89,7 +92,17 @@ async def process_case(
     docket = await fetch_docket(context, throttle, docket_no)
     analysis = analyze_docket(docket)
 
-    if not analysis.motion_types_found:
+    # A case is a match if it carries a target motion, OR (the one rule
+    # that can fire with no motion at all -- see lead_ranking.py) it's a
+    # recent bank/lender-filed complaint. Recency is checked here, not
+    # just lender-ness: every foreclosure has a complaint and most
+    # plaintiffs are lenders, so matching on lender-complaint alone would
+    # sweep in essentially every non-matching case ever skipped.
+    today = date.today()
+    recent_lender_complaint = is_recent_complaint_hot(
+        analysis.complaint_filed_date, analysis.lender_plaintiff, today
+    )
+    if not analysis.motion_types_found and not recent_lender_complaint:
         return None, None
 
     worksheet = None
@@ -128,7 +141,6 @@ async def process_case(
     normalized = normalize_docket(docket.docket_no)
     on_auction_site = normalized in auction_listing
 
-    today = date.today()
     ranking = classify_case(docket, analysis, on_auction_site, today)
 
     # Only fetch/OCR the Order document (and, for WARM cases, the
@@ -180,6 +192,24 @@ async def process_case(
         if short_sale_ratio > 0.85:
             ranking.lead_bucket = "POTENTIAL_SHORT_SALE"
 
+    # For recent-lender-complaint cases, OCR the complaint pleading itself
+    # for the principal balance owed and the P&I-unpaid-since date -- only
+    # for cases where this rule fired (it's an extra fetch + multi-page
+    # OCR per case, and those two figures are only asked for on this lead
+    # type), and only when the complaint entry actually has a document.
+    complaint_principal = None
+    complaint_unpaid_since = None
+    complaint_doc_url = (
+        analysis.complaint_entry.document_url if analysis.complaint_entry else None
+    )
+    if ranking.recent_complaint_hot and complaint_doc_url:
+        try:
+            complaint_text = await fetch_complaint_text(context, throttle, complaint_doc_url)
+            complaint_principal = extract_principal_amount(complaint_text)
+            complaint_unpaid_since = extract_unpaid_since(complaint_text)
+        except Exception:  # noqa: BLE001 -- a failed complaint OCR just leaves those cells blank
+            log.exception("failed fetching complaint document for %s", docket_no)
+
     continuance_reasons = await _fetch_continuance_reasons(context, throttle, docket.entries, docket_no)
 
     case_summary = build_case_summary(
@@ -192,8 +222,20 @@ async def process_case(
         assistance_program_label=ranking.assistance_program_label,
         assistance_program_failure_entry=analysis.assistance_program_failure_entry,
         assistance_program_hot=ranking.assistance_program_hot,
+        complaint_filed_date=ranking.complaint_filed_date,
+        lender_plaintiff=ranking.lender_plaintiff,
+        complaint_principal_amount=complaint_principal,
+        complaint_unpaid_since=complaint_unpaid_since,
+        recent_complaint_hot=ranking.recent_complaint_hot,
         today=today,
     )
+
+    # "Recent Lender Complaint" is shown alongside (or instead of) real
+    # matched motions in the Motion Type Found column, so a complaint-only
+    # match doesn't show up with an inexplicably blank match reason.
+    motion_types_display = list(analysis.motion_types_found)
+    if ranking.recent_complaint_hot:
+        motion_types_display.append("Recent Lender Complaint")
 
     result = CaseResult(
         town=town,
@@ -201,7 +243,7 @@ async def process_case(
         zip_code=zip_code,
         docket_no=docket.docket_no,
         case_caption=docket.case_caption,
-        motion_types_found=analysis.motion_types_found,
+        motion_types_found=motion_types_display,
         total_debt=total_debt,
         appraised_value=appraised_value,
         encumbrances_subsequent_itemized=encumbrances_display,
@@ -234,6 +276,14 @@ async def process_case(
             if ranking.assistance_program_entered_date else None
         ),
         assistance_program_hot=ranking.assistance_program_hot,
+        lender_plaintiff=ranking.lender_plaintiff,
+        complaint_filed_date=(
+            ranking.complaint_filed_date.isoformat() if ranking.complaint_filed_date else None
+        ),
+        complaint_doc_url=complaint_doc_url,
+        complaint_principal_amount=complaint_principal,
+        complaint_unpaid_since=complaint_unpaid_since,
+        recent_complaint_hot=ranking.recent_complaint_hot,
         continuance_count=ranking.continuance_count,
         warm_cold_subflag=ranking.warm_cold_subflag,
         case_summary=case_summary,
@@ -355,6 +405,9 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
     assistance_program_hot = analysis.assistance_program_failure_entry is not None and is_assistance_program_hot(
         analysis.assistance_program_entered_date, today
     )
+    recent_complaint_hot = is_recent_complaint_hot(
+        analysis.complaint_filed_date, analysis.lender_plaintiff, today
+    )
     case_summary = build_case_summary(
         docket.entries, key_date, result.key_date_label, result.bankruptcy_chapter, continuance_reasons,
         bankruptcy_filed_date=analysis.bankruptcy_filed_date,
@@ -364,6 +417,13 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
         assistance_program_label=analysis.assistance_program_label,
         assistance_program_failure_entry=analysis.assistance_program_failure_entry,
         assistance_program_hot=assistance_program_hot,
+        complaint_filed_date=analysis.complaint_filed_date,
+        lender_plaintiff=analysis.lender_plaintiff,
+        # reuse the stored OCR figures -- a summary backfill deliberately
+        # avoids re-fetching documents beyond the docket page itself
+        complaint_principal_amount=result.complaint_principal_amount,
+        complaint_unpaid_since=result.complaint_unpaid_since,
+        recent_complaint_hot=recent_complaint_hot,
         today=today,
     )
     return dataclasses.replace(
@@ -377,6 +437,11 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
             if analysis.assistance_program_entered_date else None
         ),
         assistance_program_hot=assistance_program_hot,
+        lender_plaintiff=analysis.lender_plaintiff,
+        complaint_filed_date=(
+            analysis.complaint_filed_date.isoformat() if analysis.complaint_filed_date else None
+        ),
+        recent_complaint_hot=recent_complaint_hot,
     )
 
 

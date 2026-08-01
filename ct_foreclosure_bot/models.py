@@ -83,6 +83,14 @@ class CaseResult:
     assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
     assistance_program_entered_date: str | None = None  # ISO format, date of the first EMAP/loan-mod docket entry
     assistance_program_hot: bool = False  # program entered, then failed/lapsed, within the 1-12 month HOT window -- see lead_ranking.py
+    # Recent-lender-complaint fields (see lead_ranking.py HOT rule and
+    # complaint_document.py OCR extraction)
+    lender_plaintiff: bool = False
+    complaint_filed_date: str | None = None  # ISO format
+    complaint_doc_url: str | None = None
+    complaint_principal_amount: float | None = None  # principal balance owed per the complaint's own text (OCR, best-effort)
+    complaint_unpaid_since: str | None = None  # date P&I unpaid since, per the complaint (ISO if parsed, else raw matched text)
+    recent_complaint_hot: bool = False  # lender complaint within the 6-month HOT window
     continuance_count: int = 0
     warm_cold_subflag: bool = False  # COLD sub-segment: 3+ continuances, no bankruptcy, non-appearing
     # Contact-tracing fields (see case_analysis.py: Return of Service,

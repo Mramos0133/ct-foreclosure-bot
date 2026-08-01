@@ -113,6 +113,40 @@ PROGRAM_FAILURE_PATTERN = re.compile(
 )
 
 
+# Recent-lender-complaint detection (see lead_ranking.py for the HOT rule
+# built on these). Two independent tests:
+#   1. The docket has a COMPLAINT entry (the case-initiating pleading).
+#      The earliest matching entry is used; the excludes keep later
+#      entries that merely *reference* the complaint (answers, requests
+#      to revise, motions to strike/dismiss it) from being mistaken for
+#      it if the docket somehow lacks the original.
+#   2. The plaintiff (caption text before "v.") reads like a bank/lender,
+#      not a condo association, municipality/tax collector, or private
+#      individual. Keyword-based; "NATIONAL ASSOCIATION"/"AS TRUSTEE"
+#      cover the securitized-trust phrasings (e.g. "U.S. BANK NATIONAL
+#      ASSOCIATION, AS TRUSTEE FOR ...").
+COMPLAINT_ENTRY_PATTERN = re.compile(r"\bCOMPLAINT\b")
+COMPLAINT_ENTRY_EXCLUDES = re.compile(
+    r"\bANSWER\b|REQUEST\s+TO\s+REVISE|MOTION\s+TO\s+STRIKE|MOTION\s+TO\s+DISMISS"
+    r"|OBJECTION|\bREPLY\b|\bRESPONSE\b"
+)
+LENDER_PLAINTIFF_PATTERN = re.compile(
+    r"\bBANK\b|MORTGAGE|\bLOANS?\b|LENDING|LENDER|FINANC"  # FINANCE / FINANCIAL
+    r"|CREDIT\s+UNION|\bFCU\b|SAVINGS|FUNDING|SERVICING"
+    r"|NATIONAL\s+ASSOCIATION|AS\s+TRUSTEE|TRUST\s+COMPANY|HOME\s+EQUITY"
+)
+
+
+def is_complaint_entry(entry_text: str) -> bool:
+    norm = normalize(entry_text)
+    return bool(COMPLAINT_ENTRY_PATTERN.search(norm)) and not COMPLAINT_ENTRY_EXCLUDES.search(norm)
+
+
+def is_lender_plaintiff(case_caption: str) -> bool:
+    plaintiff_part = re.split(r"\bvs?\.?\s", normalize(case_caption), maxsplit=1)[0]
+    return bool(LENDER_PLAINTIFF_PATTERN.search(plaintiff_part))
+
+
 def program_entry_label(entry_text: str) -> str | None:
     """"EMAP" | "Loan Modification" | None for one docket entry -- first
     match wins if an entry text somehow contains both phrasings.

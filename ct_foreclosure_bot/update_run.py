@@ -50,6 +50,7 @@ MEANINGFUL_FIELDS = (
     "default_failure_to_appear", "bankruptcy_stay_reopened",
     "bankruptcy_filed_date", "bankruptcy_reopen_hot",
     "assistance_program_label", "assistance_program_entered_date", "assistance_program_hot",
+    "recent_complaint_hot", "complaint_principal_amount", "complaint_unpaid_since",
 )
 
 

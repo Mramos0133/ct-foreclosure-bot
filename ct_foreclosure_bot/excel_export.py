@@ -34,6 +34,12 @@ COLUMNS = [
     ("New Decision Maker Phone Number", lambda r: r.new_decision_maker_phone),
     ("New Decision Maker Source Doc", lambda r: r.new_decision_maker_source_url),
     ("Motion Type Found", lambda r: "; ".join(r.motion_types_found)),
+    ("Complaint Filed Date", lambda r: r.complaint_filed_date or ""),
+    ("Principal Owed (per Complaint)", lambda r: (
+        f"{r.complaint_principal_amount:.2f}" if r.complaint_principal_amount is not None else ""
+    )),
+    ("P&I Unpaid Since (per Complaint)", lambda r: r.complaint_unpaid_since or ""),
+    ("Complaint Doc URL", lambda r: r.complaint_doc_url or ""),
     ("Judgment Granted (Y/N)", lambda r: "Y" if r.judgment_granted else "N"),
     ("Non-Appearing (Y/N)", lambda r: "Y" if r.non_appearing else "N"),
     ("Key Date", lambda r: r.key_date or ""),

@@ -78,6 +78,11 @@ def build_case_summary(
     assistance_program_label: str | None = None,
     assistance_program_failure_entry: DocketEntry | None = None,
     assistance_program_hot: bool = False,
+    complaint_filed_date: date | None = None,
+    lender_plaintiff: bool = False,
+    complaint_principal_amount: float | None = None,
+    complaint_unpaid_since: str | None = None,
+    recent_complaint_hot: bool = False,
     today: date | None = None,
 ) -> str:
     """Return a "\\n"-joined bullet list: current status facts (auction
@@ -144,6 +149,20 @@ def build_case_summary(
     # they in bankruptcy right now," which matter even if that entry
     # itself didn't make the recent-actions cut.
     lines = []
+    if recent_complaint_hot and complaint_filed_date:
+        months_ago = _months_between(complaint_filed_date, today or date.today())
+        when = f"{months_ago} months ago" if months_ago != 1 else "1 month ago"
+        lines.append(
+            f"- Complaint filed by lender {complaint_filed_date.strftime('%m/%d/%Y')} ({when})"
+            " -- HOT: recent foreclosure complaint"
+        )
+        detail_bits = []
+        if complaint_principal_amount is not None:
+            detail_bits.append(f"principal owed ${complaint_principal_amount:,.2f}")
+        if complaint_unpaid_since:
+            detail_bits.append(f"P&I unpaid since {complaint_unpaid_since}")
+        if detail_bits:
+            lines.append(f"- Per complaint: {'; '.join(detail_bits)}")
     if key_date and key_date_label:
         lines.append(f"- {key_date_label} currently scheduled for {key_date.strftime('%m/%d/%Y')}")
     if bankruptcy_chapter:
