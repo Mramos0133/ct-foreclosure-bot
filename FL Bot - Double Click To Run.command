@@ -5,6 +5,10 @@
 set -e
 cd "$(dirname "$0")"
 
+# Everything shown on screen is also saved to this file, so a failed run
+# can be diagnosed by sending the file -- no terminal scrollback needed.
+exec > >(tee "fl_bot_run_log.txt") 2>&1
+
 echo "======================================================"
 echo "  FL Foreclosure Auction Bot (Miami-Dade + Broward)"
 echo "======================================================"
@@ -60,22 +64,25 @@ echo "(roughly 5-15 minutes for a 30-day sweep, longer for more days;"
 echo " leave this window open)"
 echo
 
+# Deliberately not aborting on failure (set -e) here: the post-run
+# message below must still appear so the user knows to send the log.
 ./.fl_bot_venv/bin/python -m fl_foreclosure_bot \
     --county both \
     --auction-date "$AUCTION_DATE" \
     --days "$DAYS" \
     --output "$CSV" \
-    --export-xlsx "$XLSX"
+    --export-xlsx "$XLSX" || true
 
 echo
 if [ -f "$XLSX" ]; then
     echo "Done! Opening ${XLSX} now."
     echo "(Both files are saved in this same folder for later:"
     echo "  ${XLSX} and ${CSV})"
-    open "$XLSX"
+    open "$XLSX" || true
 else
-    echo "The run finished but no Excel file was produced -- scroll up"
-    echo "for any error text and send it back to Claude to fix."
+    echo "The run finished but no Excel file was produced."
+    echo "Send Claude the file named fl_bot_run_log.txt from this same"
+    echo "folder -- it contains everything needed to diagnose the problem."
 fi
 echo
 read -p "Press Enter to close this window..."
