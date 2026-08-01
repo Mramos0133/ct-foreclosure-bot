@@ -32,7 +32,9 @@ Buckets and the reasoning behind each (as specified by the user):
           motions.py.
 
           ALSO HOT (per explicit request): a bank/lender filed the
-          foreclosure complaint recently -- within the last
+          foreclosure complaint recently -- on/after July 1, 2026
+          (RECENT_COMPLAINT_MIN_FILED_DATE, a hard floor requested to
+          keep the pre-July backlog out of HOT) and within the last
           RECENT_COMPLAINT_HOT_MAX_MONTHS (6) months. This is the
           earliest-stage lead type: no judgment motion needs to exist
           yet (it's the only rule that can match a case with no target
@@ -89,12 +91,17 @@ ASSISTANCE_PROGRAM_HOT_MIN_MONTHS = 1
 ASSISTANCE_PROGRAM_HOT_MAX_MONTHS = 12
 
 # A bank/lender-filed complaint counts as "recent" (and therefore HOT --
-# see module docstring) when filed within this many months of today. Six
-# months keeps the definition of "recent" generous enough to cover the
-# pre-judgment window of a typical CT foreclosure (service, appearance,
-# mediation referral all happen inside it) while excluding cases old
-# enough that the complaint itself is no longer news to the owner.
+# see module docstring) when filed within this many months of today AND
+# on/after the fixed floor date below. The floor is per explicit request
+# ("only the ones from the month of July [2026] and forward"): without
+# it, the first sweep after this rule was added would have dumped the
+# entire ~6-month backlog of complaint-stage cases (hundreds of rows)
+# into HOT at once, instead of just fresh filings. The rolling
+# months-window still applies on top, so a complaint eventually ages out
+# of HOT rather than staying there forever merely for postdating the
+# floor.
 RECENT_COMPLAINT_HOT_MAX_MONTHS = 6
+RECENT_COMPLAINT_MIN_FILED_DATE = date(2026, 7, 1)
 
 
 def months_between(earlier: date, later: date) -> int:
@@ -125,6 +132,8 @@ def is_assistance_program_hot(entered_date: date | None, today: date) -> bool:
 
 def is_recent_complaint_hot(complaint_filed_date: date | None, lender_plaintiff: bool, today: date) -> bool:
     if not lender_plaintiff or complaint_filed_date is None or complaint_filed_date > today:
+        return False
+    if complaint_filed_date < RECENT_COMPLAINT_MIN_FILED_DATE:
         return False
     return months_between(complaint_filed_date, today) <= RECENT_COMPLAINT_HOT_MAX_MONTHS
 
