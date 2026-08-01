@@ -7,6 +7,8 @@ motions/status the way a docket does. Listings with no equity_estimate
 (missing assessed value or final judgment) sort last, not dropped.
 """
 
+from __future__ import annotations
+
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter

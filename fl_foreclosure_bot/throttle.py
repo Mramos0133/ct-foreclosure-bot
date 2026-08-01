@@ -11,6 +11,8 @@ the default here is a conservative single-sequential-request pace, same
 posture as the CT bot took toward its own site.
 """
 
+from __future__ import annotations
+
 import asyncio
 import random
 import time

@@ -9,6 +9,8 @@ an opt-in flag in case a corporate/VPN network hits the same
 TLS-interception issue.
 """
 
+from __future__ import annotations
+
 import os
 from playwright.async_api import Browser, BrowserContext
 

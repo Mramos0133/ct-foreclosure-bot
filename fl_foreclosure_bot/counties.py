@@ -10,6 +10,8 @@ difference changes the parsing approach in auction_page.py, which reads
 whatever labels are actually present per card.
 """
 
+from __future__ import annotations
+
 COUNTIES = {
     "miami-dade": {
         "display_name": "Miami-Dade",

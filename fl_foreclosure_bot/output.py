@@ -1,5 +1,7 @@
 """Incremental CSV output, written/flushed as each listing is parsed."""
 
+from __future__ import annotations
+
 import csv
 import os
 

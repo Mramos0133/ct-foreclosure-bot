@@ -1,5 +1,7 @@
 """Shared data structures for a single scraped auction listing."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 

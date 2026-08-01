@@ -16,6 +16,8 @@ proxy -- see throttle.py for why (the site's WAF rejected every request
 from this project's own dev sandbox regardless of request shape).
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
