@@ -239,8 +239,15 @@ def parse_listings(
 
 async def fetch_page_html(page: Page, throttle: Throttle, url: str) -> str:
     await throttle.wait()
-    await page.goto(url, wait_until="networkidle", timeout=30000)
-    return await page.content()
+    resp = await page.goto(url, wait_until="networkidle", timeout=30000)
+    status = resp.status if resp else None
+    html = await page.content()
+    if status is not None and status >= 400:
+        # Most likely the WAF rejecting the request -- surfaced loudly
+        # because the symptom downstream is just "0 listings", which is
+        # indistinguishable from a legitimately quiet auction date.
+        log.warning("HTTP %s fetching %s (page text starts: %r)", status, url, _page_text(html)[:120])
+    return html
 
 
 async def goto_next_page(page: Page, throttle: Throttle) -> bool:
@@ -278,11 +285,26 @@ async def goto_next_page(page: Page, throttle: Throttle) -> bool:
 
 
 async def iter_auction_listings(
-    page: Page, throttle: Throttle, county_name: str, base_url: str, auction_date: date
+    page: Page, throttle: Throttle, county_name: str, base_url: str, auction_date: date,
+    save_debug_html: str | None = None,
 ):
-    """Yield every AuctionListing across all pages for one county+date."""
+    """Yield every AuctionListing across all pages for one county+date.
+
+    `save_debug_html`: optional path to dump the first fetched page's raw
+    HTML to. The caller passes it for the first date of each county so
+    every run leaves behind one real-page sample per county -- the exact
+    artifact that was impossible to obtain during development (see module
+    docstring) and the first thing needed to debug a zero-listing run.
+    """
     url = build_url(base_url, auction_date)
     html = await fetch_page_html(page, throttle, url)
+    if save_debug_html:
+        try:
+            with open(save_debug_html, "w", encoding="utf-8") as f:
+                f.write(html)
+            log.info("saved raw page HTML sample to %s", save_debug_html)
+        except OSError:
+            log.warning("could not save debug HTML to %s", save_debug_html, exc_info=True)
     text = _page_text(html)
     total_pages = parse_total_pages(text)
 

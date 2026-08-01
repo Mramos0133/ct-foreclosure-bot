@@ -90,13 +90,14 @@ async def _main_async(args: argparse.Namespace) -> None:
                 for county_key in county_keys:
                     cfg = COUNTIES[county_key]
                     county_count = 0
-                    for auction_date in auction_dates:
+                    for i, auction_date in enumerate(auction_dates):
                         date_str = auction_date.strftime("%m/%d/%Y")
                         log.info("scraping %s for %s...", cfg["display_name"], date_str)
                         count = 0
                         try:
                             async for listing in iter_auction_listings(
-                                page, throttle, cfg["display_name"], cfg["base_url"], auction_date
+                                page, throttle, cfg["display_name"], cfg["base_url"], auction_date,
+                                save_debug_html=f"fl_debug_{county_key}.html" if i == 0 else None,
                             ):
                                 result_writer.write(listing)
                                 all_results.append(listing)

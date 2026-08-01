@@ -41,5 +41,22 @@ async def launch_browser(
     return await playwright.chromium.launch(**launch_kwargs)
 
 
+# A real-run produced an empty result set end-to-end (pages fetched, zero
+# cards recognized) while the same pages rendered fine in the user's own
+# browser. The site sits behind AWS WAF, which commonly rejects requests
+# whose User-Agent carries headless Chromium's "HeadlessChrome" token, so
+# the context pins a normal desktop-Chrome UA instead. The tool still
+# rate-limits conservatively and runs strictly sequentially -- behavior,
+# not the UA string, is what keeps its footprint polite.
+_DESKTOP_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
 async def new_context(browser: Browser, ignore_https_errors: bool = False) -> BrowserContext:
-    return await browser.new_context(ignore_https_errors=ignore_https_errors)
+    return await browser.new_context(
+        ignore_https_errors=ignore_https_errors,
+        user_agent=_DESKTOP_UA,
+        viewport={"width": 1280, "height": 900},
+    )

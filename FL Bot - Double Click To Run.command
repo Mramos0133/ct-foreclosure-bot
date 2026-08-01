@@ -74,15 +74,26 @@ echo
     --export-xlsx "$XLSX" || true
 
 echo
-if [ -f "$XLSX" ]; then
-    echo "Done! Opening ${XLSX} now."
+DATA_ROWS=0
+if [ -f "$CSV" ]; then
+    DATA_ROWS=$(( $(wc -l < "$CSV") - 1 ))
+    [ "$DATA_ROWS" -lt 0 ] && DATA_ROWS=0
+fi
+if [ -f "$XLSX" ] && [ "$DATA_ROWS" -gt 0 ]; then
+    echo "Done! ${DATA_ROWS} listings found. Opening ${XLSX} now."
     echo "(Both files are saved in this same folder for later:"
     echo "  ${XLSX} and ${CSV})"
     open "$XLSX" || true
 else
-    echo "The run finished but no Excel file was produced."
-    echo "Send Claude the file named fl_bot_run_log.txt from this same"
-    echo "folder -- it contains everything needed to diagnose the problem."
+    echo "PROBLEM: the run finished but found 0 listings."
+    echo
+    echo "To get this fixed, send Claude these files from this folder:"
+    echo "   1. fl_bot_run_log.txt"
+    echo "   2. fl_debug_miami-dade.html   (if present)"
+    echo "   3. fl_debug_broward.html      (if present)"
+    echo
+    echo "The two .html files are snapshots of what the website actually"
+    echo "sent the bot -- exactly what's needed to fix this for good."
 fi
 echo
 read -p "Press Enter to close this window..."
