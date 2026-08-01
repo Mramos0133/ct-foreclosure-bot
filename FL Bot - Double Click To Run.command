@@ -34,6 +34,8 @@ fi
 
 echo "Start date? Type it like 08/03/2026, or just press Enter for today."
 read -p "Start date (MM/DD/YYYY, Enter = today): " AUCTION_DATE
+# Keep only digits and slashes, so stray spaces/words don't break the run.
+AUCTION_DATE=$(echo "$AUCTION_DATE" | tr -cd '0-9/')
 if [ -z "$AUCTION_DATE" ]; then
     AUCTION_DATE=$(date "+%m/%d/%Y")
 fi
@@ -42,6 +44,8 @@ echo
 echo "How many days ahead should it check (including the start date)?"
 echo "Upcoming/future auctions are included -- e.g. 30 covers the next month."
 read -p "Days to check (Enter = 30): " DAYS
+# Keep only digits: "90 days" becomes 90, stray spaces vanish.
+DAYS=$(echo "$DAYS" | tr -cd '0-9')
 if [ -z "$DAYS" ]; then
     DAYS=30
 fi
@@ -52,7 +56,8 @@ CSV="fl_results_${STAMP}_${DAYS}days.csv"
 
 echo
 echo "Scraping Miami-Dade and Broward: ${DAYS} day(s) starting ${AUCTION_DATE}..."
-echo "(roughly 5-15 minutes for a 30-day sweep; leave this window open)"
+echo "(roughly 5-15 minutes for a 30-day sweep, longer for more days;"
+echo " leave this window open)"
 echo
 
 ./.fl_bot_venv/bin/python -m fl_foreclosure_bot \
