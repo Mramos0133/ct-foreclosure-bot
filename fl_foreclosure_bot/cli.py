@@ -90,6 +90,7 @@ async def _main_async(args: argparse.Namespace) -> None:
                 for county_key in county_keys:
                     cfg = COUNTIES[county_key]
                     county_count = 0
+                    cards_captured = False
                     for i, auction_date in enumerate(auction_dates):
                         date_str = auction_date.strftime("%m/%d/%Y")
                         log.info("scraping %s for %s...", cfg["display_name"], date_str)
@@ -98,6 +99,10 @@ async def _main_async(args: argparse.Namespace) -> None:
                             async for listing in iter_auction_listings(
                                 page, throttle, cfg["display_name"], cfg["base_url"], auction_date,
                                 save_debug_html=f"fl_debug_{county_key}.html" if i == 0 else None,
+                                save_debug_with_cards=(
+                                    None if cards_captured
+                                    else f"fl_debug_{county_key}_withcards.html"
+                                ),
                             ):
                                 result_writer.write(listing)
                                 all_results.append(listing)
@@ -106,6 +111,7 @@ async def _main_async(args: argparse.Namespace) -> None:
                             log.exception("failed scraping %s %s", cfg["display_name"], date_str)
                         if count:
                             log.info("%s %s: %d listings", cfg["display_name"], date_str, count)
+                            cards_captured = True
                         county_count += count
                     log.info("%s total: %d listings across %d date(s)", cfg["display_name"], county_count, len(auction_dates))
             finally:

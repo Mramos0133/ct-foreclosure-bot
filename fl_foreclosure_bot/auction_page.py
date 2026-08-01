@@ -33,14 +33,33 @@ Confirmed from screenshots:
         ABSENT on at least one real Broward card -- treated as optional
         everywhere, not county-specific, since it may simply be
         case-dependent.
-  - Pagination shows as "page N of M" with "PRE"/"NEXT" controls;
-    confirmed present (e.g. "page 1 of 3") but the exact clickable
-    element (button/link/image-input) was not confirmed since no raw
-    HTML was available. goto_next_page() below tries a few reasonable
-    ways to find a "NEXT"-labeled control and clicks the first one that
-    looks enabled; if that guess is wrong on the real site, only page 1
-    gets scraped and a warning is logged -- report the exact on-page
-    control back to get this fixed rather than it silently hanging.
+  - Pagination shows as "page N of M" with "PRE"/"NEXT" controls.
+
+Confirmed later from real saved page HTML (fl_debug captures -- the
+first raw HTML ever obtained for this site, see README):
+  - The auction cards are NOT in the initial server HTML: the page ships
+    an empty `<div id="docPgContainer">` and JavaScript fills it in via
+    AJAX afterwards. page.goto(wait_until="networkidle") happens to wait
+    long enough for that in practice (cards were successfully parsed on
+    real runs), but it means pager clicks swap content in place with NO
+    page navigation -- so advancing pages must wait for the DOM's cards
+    to change, never for a navigation event.
+  - The pager's current-page number is an <input> box, so the rendered
+    text is "page  of 3" (no current number!) -- parse_total_pages()
+    must treat the current-page digits as optional or it concludes
+    every date is single-page and never paginates at all. This was the
+    actual root cause of a real run under-counting a date's auctions.
+  - The page also carries a "Next Auction > >" link that navigates to a
+    DIFFERENT DATE -- any next-control matching must exclude it (and
+    the "Previous Auction"/"Current" links) or pagination would silently
+    walk off the requested date. Matching below therefore excludes
+    elements whose text mentions "auction" and anything in the BLHeader
+    date-navigation bar.
+  - The pager's own clickable element markup is still not directly
+    confirmed (the captured pages were a quiet Saturday with no cards);
+    _find_next_page_controls() casts a wide net over likely shapes and
+    the run saves a with-cards HTML sample per county so a still-wrong
+    guess can be pinned down from evidence on the next round.
 """
 
 from __future__ import annotations
@@ -92,8 +111,10 @@ def _page_text(html: str) -> str:
 
 
 def parse_total_pages(page_text: str) -> int:
-    m = re.search(r"page\s*(\d+)\s*of\s*(\d+)", page_text, re.I)
-    return int(m.group(2)) if m else 1
+    # Current page number is an <input>, so it's usually MISSING from the
+    # rendered text ("page  of 3") -- optional group, or nothing paginates.
+    m = re.search(r"page\s*(?:\d+\s*)?of\s*(\d+)", page_text, re.I)
+    return int(m.group(1)) if m else 1
 
 
 def _parse_block(
@@ -250,51 +271,89 @@ async def fetch_page_html(page: Page, throttle: Throttle, url: str) -> str:
     return html
 
 
-async def goto_next_page(page: Page, throttle: Throttle) -> bool:
-    """Best-effort click of a "NEXT"-labeled pagination control.
+# The date-navigation bar ("Previous Auction" / "Current" / "Next
+# Auction > >") changes DATES, not result pages -- clicking it would
+# silently walk the scrape onto the wrong day. Confirmed classes from
+# real HTML: BLHeaderPrev/BLHeaderNext/BLHeaderToday inside .BLNav.
+_NEXT_TEXT_RE = re.compile(r"NEXT", re.I)
+_DATE_NAV_TEXT_RE = re.compile(r"auction|previous|current", re.I)
 
-    Returns True if a click happened (caller should re-fetch page.content()
-    and re-parse), False if no such control could be found -- not
-    confirmed against real HTML (see module docstring), so this tries a
-    few reasonable element shapes rather than one hard-coded selector.
+_NEXT_CONTROL_SELECTORS = [
+    "[class*='PageRight']",
+    "[class*='PageNext']",
+    "[class*='pgnext' i]",
+    "img[alt*='next' i]",
+    "input[type='image'][alt*='next' i]",
+]
+
+# Cheap textual hint that a pager exists at all, so quiet dates (most of
+# a 90-day sweep) skip the click-hunt entirely.
+_PAGER_HINT_RE = re.compile(r"PageRight|PageNext|pgnext|page\s*(?:\d+\s*)?of\s*\d+", re.I)
+
+
+async def _find_next_page_controls(page: Page) -> list:
+    """Collect plausible next-page controls, excluding date navigation.
+
+    Wide-net matching (see module docstring: the pager's exact markup is
+    unconfirmed): class-based candidates first, then anything whose own
+    text is essentially just "NEXT". Every candidate is filtered against
+    the date-nav bar's classes/wording.
     """
-    candidates = [
-        "input[value*='NEXT' i]",
-        "button:has-text('NEXT')",
-        "a:has-text('NEXT')",
-        "input[type=image][alt*='NEXT' i]",
-    ]
-    for selector in candidates:
-        locator = page.locator(selector)
+    handles = []
+    for sel in _NEXT_CONTROL_SELECTORS:
         try:
-            count = await locator.count()
+            handles += await page.locator(sel).element_handles()
         except Exception:  # noqa: BLE001
             continue
-        if count == 0:
-            continue
+    try:
+        loc = page.locator("a, button, span, div, input").filter(
+            has_text=re.compile(r"^\s*NEXT\s*\W{0,3}$", re.I)
+        )
+        handles += await loc.element_handles()
+    except Exception:  # noqa: BLE001
+        pass
+
+    result = []
+    for h in handles:
         try:
-            await throttle.wait()
-            async with page.expect_navigation(wait_until="networkidle", timeout=30000):
-                await locator.first.click()
-            return True
+            cls = (await h.get_attribute("class")) or ""
+            if "BLHeader" in cls or "BLNav" in cls:
+                continue
+            text = (await h.inner_text() or "").strip()
+            if _DATE_NAV_TEXT_RE.search(text):
+                continue
+            if not await h.is_visible():
+                continue
         except Exception:  # noqa: BLE001
-            log.warning("found a %r control but clicking/navigating it failed", selector, exc_info=True)
             continue
-    log.warning("no pagination 'NEXT' control found by any known selector -- only this page was scraped")
-    return False
+        result.append(h)
+        if len(result) >= 6:
+            break
+    return result
 
 
 async def iter_auction_listings(
     page: Page, throttle: Throttle, county_name: str, base_url: str, auction_date: date,
     save_debug_html: str | None = None,
+    save_debug_with_cards: str | None = None,
 ):
-    """Yield every AuctionListing across all pages for one county+date.
+    """Yield every AuctionListing across all result pages for one
+    county+date.
 
-    `save_debug_html`: optional path to dump the first fetched page's raw
-    HTML to. The caller passes it for the first date of each county so
-    every run leaves behind one real-page sample per county -- the exact
-    artifact that was impossible to obtain during development (see module
-    docstring) and the first thing needed to debug a zero-listing run.
+    Pagination strategy (AJAX-aware -- clicks swap content in place, no
+    navigation happens): repeatedly click each candidate next-control,
+    wait briefly for the swapped-in content, re-parse the whole DOM, and
+    yield only cases not yet seen. Stops when a full round of clicking
+    yields nothing new (covers both "last page reached" and "controls
+    were no-ops"), with a hard cap as a runaway guard. Clicking every
+    candidate each round also covers the possibility that each section
+    (Running / Waiting / Closed) has its own independent pager.
+
+    `save_debug_html`: dump the first fetched page's raw HTML here (the
+    caller passes it once per county). `save_debug_with_cards`: same,
+    but only when the date actually has listings -- a quiet date's page
+    has no cards and no pager, so only a with-cards capture can answer
+    what the pager's real markup is if pagination still under-delivers.
     """
     url = build_url(base_url, auction_date)
     html = await fetch_page_html(page, throttle, url)
@@ -305,22 +364,57 @@ async def iter_auction_listings(
             log.info("saved raw page HTML sample to %s", save_debug_html)
         except OSError:
             log.warning("could not save debug HTML to %s", save_debug_html, exc_info=True)
-    text = _page_text(html)
-    total_pages = parse_total_pages(text)
 
     seen_case_nos: set[str] = set()
-    page_num = 1
-    while True:
-        for listing in parse_listings(html, county_name, auction_date, url):
-            if listing.case_no in seen_case_nos:
-                continue
-            seen_case_nos.add(listing.case_no)
-            yield listing
 
-        if page_num >= total_pages:
-            break
-        advanced = await goto_next_page(page, throttle)
-        if not advanced:
-            break
-        html = await page.content()
-        page_num += 1
+    def _new_listings(current_html: str) -> list[AuctionListing]:
+        fresh = []
+        for listing in parse_listings(current_html, county_name, auction_date, url):
+            if listing.case_no not in seen_case_nos:
+                seen_case_nos.add(listing.case_no)
+                fresh.append(listing)
+        return fresh
+
+    first_page_listings = _new_listings(html)
+    if first_page_listings and save_debug_with_cards:
+        try:
+            with open(save_debug_with_cards, "w", encoding="utf-8") as f:
+                f.write(html)
+            log.info("saved with-cards page HTML sample to %s", save_debug_with_cards)
+        except OSError:
+            log.warning("could not save debug HTML to %s", save_debug_with_cards, exc_info=True)
+    for listing in first_page_listings:
+        yield listing
+
+    total_pages = parse_total_pages(_page_text(html))
+    if total_pages <= 1 and not _PAGER_HINT_RE.search(html):
+        return
+    if total_pages > 1:
+        log.info("%s %s: pager reports %d pages", county_name, auction_date.isoformat(), total_pages)
+
+    rounds = 0
+    while rounds < 40:
+        rounds += 1
+        controls = await _find_next_page_controls(page)
+        if not controls:
+            if total_pages > 1 and rounds == 1:
+                log.warning(
+                    "%s %s: pager reports %d pages but no next-control matched -- "
+                    "only page 1 scraped; send the fl_debug_*_withcards.html file to fix this",
+                    county_name, auction_date.isoformat(), total_pages,
+                )
+            return
+        new_this_round = 0
+        for control in controls:
+            try:
+                await throttle.wait()  # each click is a server request
+                await control.click()
+                await page.wait_for_timeout(1500)  # let the AJAX swap finish
+            except Exception:  # noqa: BLE001 -- a dead control just contributes nothing
+                continue
+            html = await page.content()
+            for listing in _new_listings(html):
+                new_this_round += 1
+                yield listing
+        if new_this_round == 0:
+            return
