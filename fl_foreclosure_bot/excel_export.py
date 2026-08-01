@@ -4,15 +4,22 @@ Sheets, in tab order (per explicit request -- the active/upcoming
 auctions are the actionable leads, so they come first and aren't mixed
 in with the noise of already-decided ones):
 
-  ACTIVE    -- anything not yet sold or canceled: scheduled/waiting/
-               running auctions. Sorted soonest auction date first, then
-               biggest equity cushion first within a date.
+  ACTIVE    -- not yet sold or canceled, and the auction date is still
+               in the future: scheduled/waiting/running auctions.
+               Sorted soonest auction date first, then biggest equity
+               cushion first within a date.
   SOLD      -- status "Sold". Useful as comp/outcome data.
   CANCELED  -- status contains "cancel" (e.g. "Canceled per Order",
                "Canceled per Bankruptcy"). Kept for reference; a
                canceled sale can also signal a workout/short-sale
                conversation happening -- but per explicit request these
                are out of the main view.
+  PAST_UNRESOLVED -- still shows as scheduled, but the auction date has
+               already passed, so the stored row predates whatever
+               actually happened. Kept visible (not silently dropped,
+               not left in ACTIVE where it would read as a live lead)
+               and normally self-clears: the incremental runner
+               re-scrapes recently-passed dates to pick up outcomes.
 
 Bucketing keys off the auction_status text since that's all this data
 source exposes (no docket detail here, unlike the CT bot). An empty or
@@ -24,6 +31,8 @@ within-date ranking; rows missing either figure sort last, not dropped.
 """
 
 from __future__ import annotations
+
+from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -54,16 +63,20 @@ COLUMNS = [
 ]
 
 
-SHEET_ORDER = ["ACTIVE", "SOLD", "CANCELED"]
+SHEET_ORDER = ["ACTIVE", "SOLD", "CANCELED", "PAST_UNRESOLVED"]
 
 
-def bucket_for(r: AuctionListing) -> str:
+def bucket_for(r: AuctionListing, today: date) -> str:
     status = r.auction_status.strip().lower()
     if status == "sold":
         return "SOLD"
     if "cancel" in status:
         return "CANCELED"
-    return "ACTIVE"
+    try:
+        auction_day = date.fromisoformat(r.auction_date)
+    except ValueError:
+        return "ACTIVE"  # unparseable date: show it rather than hide it
+    return "ACTIVE" if auction_day >= today else "PAST_UNRESOLVED"
 
 
 def _sort_key_active(r: AuctionListing):
@@ -80,16 +93,18 @@ SORT_KEYS = {
     "ACTIVE": _sort_key_active,
     "SOLD": _sort_key_decided,
     "CANCELED": _sort_key_decided,
+    "PAST_UNRESOLVED": _sort_key_active,
 }
 
 
-def build_workbook(results: list[AuctionListing]) -> Workbook:
+def build_workbook(results: list[AuctionListing], today: date | None = None) -> Workbook:
+    today = today or date.today()
     wb = Workbook()
     wb.remove(wb.active)  # default blank sheet
 
     by_bucket: dict[str, list[AuctionListing]] = {b: [] for b in SHEET_ORDER}
     for r in results:
-        by_bucket[bucket_for(r)].append(r)
+        by_bucket[bucket_for(r, today)].append(r)
 
     for bucket in SHEET_ORDER:
         ws = wb.create_sheet(title=bucket)
@@ -108,10 +123,13 @@ def build_workbook(results: list[AuctionListing]) -> Workbook:
     return wb
 
 
-def export_to_xlsx(results: list[AuctionListing], output_path: str) -> dict[str, int]:
-    wb = build_workbook(results)
+def export_to_xlsx(
+    results: list[AuctionListing], output_path: str, today: date | None = None
+) -> dict[str, int]:
+    today = today or date.today()
+    wb = build_workbook(results, today)
     wb.save(output_path)
     counts = {b: 0 for b in SHEET_ORDER}
     for r in results:
-        counts[bucket_for(r)] += 1
+        counts[bucket_for(r, today)] += 1
     return counts

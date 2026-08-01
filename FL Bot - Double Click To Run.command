@@ -36,53 +36,72 @@ if [ ! -d ".fl_bot_venv" ]; then
     echo
 fi
 
-echo "Start date? Type it like 08/03/2026, or just press Enter for today."
-read -p "Start date (MM/DD/YYYY, Enter = today): " AUCTION_DATE
+echo "Press Enter for the normal update: keeps you covered 90 days out,"
+echo "and only checks the days it hasn't already got (fast after the"
+echo "first run)."
+echo
+echo "Or type a specific start date (like 08/03/2026) to re-check a"
+echo "particular range instead."
+read -p "Start date (Enter = normal update): " AUCTION_DATE
 # Keep only digits and slashes, so stray spaces/words don't break the run.
 AUCTION_DATE=$(echo "$AUCTION_DATE" | tr -cd '0-9/')
+
+STAMP=$(date "+%m-%d-%Y")
+XLSX="fl_leads_${STAMP}.xlsx"
+CSV="fl_newly_fetched_${STAMP}.csv"
+
 if [ -z "$AUCTION_DATE" ]; then
-    AUCTION_DATE=$(date "+%m/%d/%Y")
+    echo
+    echo "How many days ahead do you want covered?"
+    read -p "Days ahead (Enter = 90): " HORIZON
+    HORIZON=$(echo "$HORIZON" | tr -cd '0-9')
+    [ -z "$HORIZON" ] && HORIZON=90
+    echo
+    echo "Updating Miami-Dade and Broward, ${HORIZON} days out..."
+    echo "(the first run takes a while; later runs only fetch new days)"
+    echo
+    # Deliberately not aborting on failure (set -e): the post-run message
+    # below must still appear so the user knows to send the log.
+    ./.fl_bot_venv/bin/python -m fl_foreclosure_bot \
+        --county both \
+        --horizon "$HORIZON" \
+        --output "$CSV" \
+        --export-xlsx "$XLSX" || true
+else
+    echo
+    read -p "How many days from that date? (Enter = 1): " DAYS
+    DAYS=$(echo "$DAYS" | tr -cd '0-9')
+    [ -z "$DAYS" ] && DAYS=1
+    echo
+    echo "Re-checking Miami-Dade and Broward: ${DAYS} day(s) from ${AUCTION_DATE}..."
+    echo
+    ./.fl_bot_venv/bin/python -m fl_foreclosure_bot \
+        --county both \
+        --auction-date "$AUCTION_DATE" \
+        --days "$DAYS" \
+        --output "$CSV" \
+        --export-xlsx "$XLSX" || true
 fi
 
 echo
-echo "How many days ahead should it check (including the start date)?"
-echo "Upcoming/future auctions are included -- e.g. 30 covers the next month."
-read -p "Days to check (Enter = 30): " DAYS
-# Keep only digits: "90 days" becomes 90, stray spaces vanish.
-DAYS=$(echo "$DAYS" | tr -cd '0-9')
-if [ -z "$DAYS" ]; then
-    DAYS=30
-fi
-
-STAMP=$(echo "$AUCTION_DATE" | tr '/' '-')
-XLSX="fl_leads_${STAMP}_${DAYS}days.xlsx"
-CSV="fl_results_${STAMP}_${DAYS}days.csv"
-
-echo
-echo "Scraping Miami-Dade and Broward: ${DAYS} day(s) starting ${AUCTION_DATE}..."
-echo "(roughly 5-15 minutes for a 30-day sweep, longer for more days;"
-echo " leave this window open)"
-echo
-
-# Deliberately not aborting on failure (set -e) here: the post-run
-# message below must still appear so the user knows to send the log.
-./.fl_bot_venv/bin/python -m fl_foreclosure_bot \
-    --county both \
-    --auction-date "$AUCTION_DATE" \
-    --days "$DAYS" \
-    --output "$CSV" \
-    --export-xlsx "$XLSX" || true
-
-echo
-DATA_ROWS=0
+# Judge success by what's in the accumulated store, NOT by how many rows
+# this run fetched: a normal weekly update legitimately finds few or no
+# new listings, and that is not a failure.
+TOTAL_ROWS=$(./.fl_bot_venv/bin/python -c "
+import sqlite3, sys
+try:
+    print(sqlite3.connect('fl_auction_store.sqlite3').execute('SELECT COUNT(*) FROM listings').fetchone()[0])
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+NEW_ROWS=0
 if [ -f "$CSV" ]; then
-    DATA_ROWS=$(( $(wc -l < "$CSV") - 1 ))
-    [ "$DATA_ROWS" -lt 0 ] && DATA_ROWS=0
+    NEW_ROWS=$(( $(wc -l < "$CSV") - 1 ))
+    [ "$NEW_ROWS" -lt 0 ] && NEW_ROWS=0
 fi
-if [ -f "$XLSX" ] && [ "$DATA_ROWS" -gt 0 ]; then
-    echo "Done! ${DATA_ROWS} listings found. Opening ${XLSX} now."
-    echo "(Both files are saved in this same folder for later:"
-    echo "  ${XLSX} and ${CSV})"
+if [ -f "$XLSX" ] && [ "$TOTAL_ROWS" -gt 0 ]; then
+    echo "Done! ${TOTAL_ROWS} listings on file (${NEW_ROWS} fetched this run)."
+    echo "Opening ${XLSX} now -- start with the ACTIVE tab."
     open "$XLSX" || true
 else
     echo "PROBLEM: the run finished but found 0 listings."

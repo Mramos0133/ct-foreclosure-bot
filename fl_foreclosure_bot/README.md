@@ -26,20 +26,40 @@ python -m playwright install chromium
 
 ## Usage
 
+Normal (rolling) mode -- keeps you covered N days out and only fetches
+dates it hasn't already got, so the first run does the full window and
+later runs do just the few days that newly came into range:
+
 ```
-python -m fl_foreclosure_bot --county miami-dade --auction-date 07/08/2026
-python -m fl_foreclosure_bot --county broward --auction-date 07/08/2026
-python -m fl_foreclosure_bot --county both --auction-date 07/08/2026 --export-xlsx leads.xlsx
+python -m fl_foreclosure_bot --county both                 # 90 days out
+python -m fl_foreclosure_bot --county both --horizon 120
 ```
 
-`--auction-date` must be `MM/DD/YYYY`, matching the site's own URL
-format. Run it weekly with whatever date you want previewed; each run
-appends to `--output` (CSV) and rewrites `--export-xlsx` from everything
-scraped so far in that CSV run.
+Manual mode -- fetch exactly the dates named, ignoring what's stored:
 
-To automate the weekly run, add a cron entry (Mac/Linux) or Task
-Scheduler task (Windows) that runs the command above -- see the repo's
-top-level notes or ask for help setting one up.
+```
+python -m fl_foreclosure_bot --county miami-dade --auction-date 08/03/2026
+python -m fl_foreclosure_bot --county both --auction-date 08/03/2026 --days 30
+```
+
+Results accumulate in `fl_auction_store.sqlite3`, and the Excel workbook
+is rebuilt from that whole store every run -- so an incremental run that
+fetches 7 days still exports every listing known. The CSV, by contrast,
+logs only the rows fetched that run.
+
+Rolling mode also re-fetches a window around today (`--refresh-days`,
+default: 7 days back through 14 ahead) even though those dates are
+stored: statuses change, and dates that just passed need one more look
+to record whether they sold or were canceled. `--refresh-days 0` turns
+that off for a purely additive run.
+
+Workbook sheets: **ACTIVE** (upcoming, not yet sold/canceled -- the
+lead list), **SOLD**, **CANCELED**, and **PAST_UNRESOLVED** (still shows
+as scheduled but the date has passed; normally emptied by the refresh
+window on the next run).
+
+On a Mac, `FL Bot - Double Click To Run.command` wraps all of this, and
+`FL Bot - Schedule Weekly.command` installs a weekly automatic run.
 
 ## Known limitations / how this was built
 
