@@ -2,8 +2,14 @@
 
 Usage examples:
     python -m fl_foreclosure_bot --county miami-dade --auction-date 07/08/2026
-    python -m fl_foreclosure_bot --county broward --auction-date 07/08/2026
-    python -m fl_foreclosure_bot --county both --auction-date 07/08/2026 --export-xlsx leads.xlsx
+    python -m fl_foreclosure_bot --county both --auction-date 08/03/2026 --days 30
+    python -m fl_foreclosure_bot --county both --days 30   # start date defaults to today
+
+Future dates work the same as past ones -- the site's AUCTIONDATE URL
+parameter accepts any date, and a future date's page lists that day's
+*scheduled* (upcoming) auctions. --days sweeps a whole window of dates
+into one combined output, since upcoming-sale hunting is the main use.
+Dates with no auctions (weekends etc.) simply contribute zero rows.
 
 Run this from a normal home/office network, not a cloud VM or corporate
 proxy -- see throttle.py for why (the site's WAF rejected every request
@@ -14,7 +20,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from playwright.async_api import async_playwright
 
@@ -34,7 +40,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Scrape a realforeclose.com auction-date preview page (Miami-Dade and/or Broward) for foreclosure sale listings.",
     )
     p.add_argument("--county", required=True, choices=[*county_choices(), "both"], help="Which county's auction calendar to scrape.")
-    p.add_argument("--auction-date", required=True, help="MM/DD/YYYY, matching the site's own URL format (e.g. 07/08/2026).")
+    p.add_argument("--auction-date", default=None, help="Start date, MM/DD/YYYY, matching the site's own URL format (e.g. 08/03/2026). Defaults to today.")
+    p.add_argument("--days", type=int, default=1, help="How many consecutive calendar days to scrape starting at --auction-date (default 1). Dates with no auctions just add nothing.")
     p.add_argument("--output", default="fl_foreclosure_results.csv", help="Output CSV path (appended to).")
     p.add_argument("--export-xlsx", default="fl_foreclosure_leads.xlsx", help="Ranked Excel workbook, (re)written at the end of the run. Pass '' to skip.")
     p.add_argument("--headed", action="store_true", help="Run the browser headed (debugging only).")
@@ -60,7 +67,10 @@ async def _main_async(args: argparse.Namespace) -> None:
         stream=sys.stdout,
     )
 
-    auction_date = _parse_auction_date(args.auction_date)
+    start_date = _parse_auction_date(args.auction_date) if args.auction_date else date.today()
+    if args.days < 1:
+        raise SystemExit("--days must be >= 1")
+    auction_dates = [start_date + timedelta(days=i) for i in range(args.days)]
     county_keys = list(COUNTIES.keys()) if args.county == "both" else [args.county]
 
     result_writer = ResultWriter(args.output)
@@ -77,18 +87,24 @@ async def _main_async(args: argparse.Namespace) -> None:
                 page = await context.new_page()
                 for county_key in county_keys:
                     cfg = COUNTIES[county_key]
-                    log.info("scraping %s for %s...", cfg["display_name"], args.auction_date)
-                    count = 0
-                    try:
-                        async for listing in iter_auction_listings(
-                            page, throttle, cfg["display_name"], cfg["base_url"], auction_date
-                        ):
-                            result_writer.write(listing)
-                            all_results.append(listing)
-                            count += 1
-                    except Exception:  # noqa: BLE001 - one county's failure shouldn't sink the other
-                        log.exception("failed scraping %s", cfg["display_name"])
-                    log.info("%s: %d listings found", cfg["display_name"], count)
+                    county_count = 0
+                    for auction_date in auction_dates:
+                        date_str = auction_date.strftime("%m/%d/%Y")
+                        log.info("scraping %s for %s...", cfg["display_name"], date_str)
+                        count = 0
+                        try:
+                            async for listing in iter_auction_listings(
+                                page, throttle, cfg["display_name"], cfg["base_url"], auction_date
+                            ):
+                                result_writer.write(listing)
+                                all_results.append(listing)
+                                count += 1
+                        except Exception:  # noqa: BLE001 - one date's failure shouldn't sink the rest
+                            log.exception("failed scraping %s %s", cfg["display_name"], date_str)
+                        if count:
+                            log.info("%s %s: %d listings", cfg["display_name"], date_str, count)
+                        county_count += count
+                    log.info("%s total: %d listings across %d date(s)", cfg["display_name"], county_count, len(auction_dates))
             finally:
                 await browser.close()
     finally:

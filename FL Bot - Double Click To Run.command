@@ -32,26 +32,33 @@ if [ ! -d ".fl_bot_venv" ]; then
     echo
 fi
 
-echo "Which auction date do you want? Type it like: 07/08/2026"
-read -p "Auction date (MM/DD/YYYY): " AUCTION_DATE
+echo "Start date? Type it like 08/03/2026, or just press Enter for today."
+read -p "Start date (MM/DD/YYYY, Enter = today): " AUCTION_DATE
 if [ -z "$AUCTION_DATE" ]; then
-    echo "No date entered -- nothing to do."
-    read -p "Press Enter to close this window..."
-    exit 1
+    AUCTION_DATE=$(date "+%m/%d/%Y")
+fi
+
+echo
+echo "How many days ahead should it check (including the start date)?"
+echo "Upcoming/future auctions are included -- e.g. 30 covers the next month."
+read -p "Days to check (Enter = 30): " DAYS
+if [ -z "$DAYS" ]; then
+    DAYS=30
 fi
 
 STAMP=$(echo "$AUCTION_DATE" | tr '/' '-')
-XLSX="fl_leads_${STAMP}.xlsx"
-CSV="fl_results_${STAMP}.csv"
+XLSX="fl_leads_${STAMP}_${DAYS}days.xlsx"
+CSV="fl_results_${STAMP}_${DAYS}days.csv"
 
 echo
-echo "Scraping Miami-Dade and Broward for ${AUCTION_DATE}..."
-echo "(a couple of minutes; leave this window open)"
+echo "Scraping Miami-Dade and Broward: ${DAYS} day(s) starting ${AUCTION_DATE}..."
+echo "(roughly 5-15 minutes for a 30-day sweep; leave this window open)"
 echo
 
 ./.fl_bot_venv/bin/python -m fl_foreclosure_bot \
     --county both \
     --auction-date "$AUCTION_DATE" \
+    --days "$DAYS" \
     --output "$CSV" \
     --export-xlsx "$XLSX"
 

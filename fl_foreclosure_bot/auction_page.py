@@ -185,28 +185,53 @@ def _parse_section(
     return results
 
 
+# Section headers observed on real (past-date) pages: "Running Auctions"
+# and "Auctions Closed or Canceled". A future date's page lists that day's
+# *scheduled* auctions instead, and its section header was never directly
+# observed (only past-date screenshots were available during development)
+# -- "Auctions Waiting" is the RealAuction platform's usual wording, so
+# it's included here best-effort. Any cards outside every recognized
+# section still get captured by the trailing catch-all pass below rather
+# than dropped, so an unrecognized header only mislabels the `section`
+# column, never loses listings.
+_SECTION_HEADERS = [
+    ("running auctions", "Running"),
+    ("auctions waiting", "Waiting"),
+    ("auctions closed or canceled", "Closed or Canceled"),
+]
+
+
 def parse_listings(
     html: str, county_name: str, auction_date: date, source_url: str
 ) -> list[AuctionListing]:
     text = _page_text(html)
     anchors = _extract_anchor_map(html)
     auction_date_iso = auction_date.isoformat()
+    lower = text.lower()
 
-    running_idx = text.lower().find("running auctions")
-    closed_idx = text.lower().find("auctions closed or canceled")
+    found = sorted(
+        (idx, label)
+        for header, label in _SECTION_HEADERS
+        if (idx := lower.find(header)) != -1
+    )
 
     results: list[AuctionListing] = []
-    if running_idx != -1:
-        end = closed_idx if closed_idx != -1 else len(text)
-        running_text = text[running_idx:end]
-        results += _parse_section(running_text, "Running", county_name, auction_date_iso, source_url, anchors)
-    if closed_idx != -1:
-        closed_text = text[closed_idx:]
-        results += _parse_section(closed_text, "Closed or Canceled", county_name, auction_date_iso, source_url, anchors)
-    if running_idx == -1 and closed_idx == -1:
-        # Layout didn't match either known section header -- fall back to
-        # scanning the whole page rather than returning nothing.
-        results += _parse_section(text, "Unknown", county_name, auction_date_iso, source_url, anchors)
+    seen: set[str] = set()
+
+    def _add(section_text: str, label: str) -> None:
+        for listing in _parse_section(section_text, label, county_name, auction_date_iso, source_url, anchors):
+            if listing.case_no not in seen:
+                seen.add(listing.case_no)
+                results.append(listing)
+
+    for i, (idx, label) in enumerate(found):
+        end = found[i + 1][0] if i + 1 < len(found) else len(text)
+        _add(text[idx:end], label)
+
+    # Catch-all: any cards before the first recognized header, or on a page
+    # with no recognized headers at all (e.g. a future-date layout that
+    # words its section differently than guessed above).
+    _add(text[: found[0][0]] if found else text, "Unknown")
     return results
 
 
