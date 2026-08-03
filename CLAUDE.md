@@ -32,6 +32,39 @@ remote execution environment -- Playwright's own bundled browser isn't
 present here; `browser.py` reads this env var as an `executable_path`
 override.
 
+## "Pull these specific cities" workflow
+
+When the user asks for a list limited to particular towns, ALWAYS produce
+it in the same format as the master statewide sheet -- same columns, same
+HOT/WARM/COLD/POTENTIAL_SHORT_SALE/UNCLASSIFIED tabs, same green(new)/
+yellow(updated) highlighting. Do not invent a bespoke layout; use
+`scripts/city_pull.py`, which calls the same `export_to_xlsx()` the
+master sheet uses, so the two never drift apart.
+
+```
+python3 scripts/city_pull.py Watertown Woodbury Middlebury Naugatuck Seymour \
+  --output watertown_area_leads.xlsx \
+  --door-knock \
+  --live-auction /tmp/live_sales.json \
+  --new-since <older_checkpoint.sqlite3>
+```
+
+`--door-knock` narrows to the field-visit subset (lender complaint within
+`--complaint-days`, default 30, OR heading to auction). Omit it to export
+every matched case in those towns.
+
+Two staleness fixes the script applies, worth knowing about:
+
+- `days_to_key_date` is frozen at scrape time in the checkpoint, so a row
+  can claim "8 days" on a sale that already happened. The script always
+  recomputes it against today.
+- A stored `key_date` comes from the Order document at scrape time and is
+  often missing for a case that was posted for sale later. Re-read the
+  auction site and pass the fresh dates via `--live-auction`
+  ({docket_no: "YYYY-MM-DD"} JSON) whenever the list is for real outreach
+  -- on the last pull this filled in three sale dates that showed as
+  blank, two of which were only days away.
+
 ## Lead classification rules
 
 See the module docstring in `lead_ranking.py` for the full HOT/WARM/COLD
