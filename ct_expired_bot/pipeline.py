@@ -43,6 +43,9 @@ class RunConfig:
     imap_host: str = ""
     imap_user: str = ""
     imap_password: str = ""
+    graph_client_id: str = ""
+    graph_tenant: str = ""
+    graph_token_cache: Path | None = None
     sender_filter: str | None = None
     profile_dir: Path | None = None
     headless: bool = True
@@ -95,6 +98,16 @@ def collect_alerts(config: RunConfig, since: datetime) -> list[AlertListing]:
     found: list[AlertListing] = []
     if config.alerts_dir:
         found += alerts_mod.load_from_dir(config.alerts_dir, since=since)
+    if config.graph_client_id and config.graph_tenant:
+        from .graph_mail import load_from_graph
+
+        found += load_from_graph(
+            config.graph_client_id,
+            config.graph_tenant,
+            since=since,
+            sender_filter=config.sender_filter,
+            cache_path=config.graph_token_cache,
+        )
     if config.imap_host and config.imap_user and config.imap_password:
         found += alerts_mod.load_from_imap(
             config.imap_host,

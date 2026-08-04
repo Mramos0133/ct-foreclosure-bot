@@ -44,7 +44,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--master", default="CT-Expired-Master.xlsx", help="Master workbook path (Leads / Town Portals / Meta). Created on first run.")
     p.add_argument("--alerts-dir", default=None, help="Directory of saved SmartMLS alert emails (.eml/.html).")
     p.add_argument("--imap-host", default="", help="IMAP host for fetching alerts (e.g. outlook.office365.com, imap.gmail.com).")
-    p.add_argument("--imap-user", default="", help="IMAP username. Password comes from CT_EXPIRED_IMAP_PASSWORD.")
+    p.add_argument("--imap-user", default="", help="IMAP username. Password comes from CT_EXPIRED_IMAP_PASSWORD. NOTE: Microsoft disabled basic-auth IMAP on Exchange Online -- use the --graph-* options for an M365 mailbox.")
+    p.add_argument("--graph-client-id", default=os.environ.get("CT_EXPIRED_GRAPH_CLIENT_ID", ""), help="Entra ID application (client) ID for reading mail over Microsoft Graph. Defaults to CT_EXPIRED_GRAPH_CLIENT_ID.")
+    p.add_argument("--graph-tenant", default=os.environ.get("CT_EXPIRED_GRAPH_TENANT", ""), help="Entra ID directory (tenant) ID. Defaults to CT_EXPIRED_GRAPH_TENANT.")
+    p.add_argument("--graph-token-cache", default=None, help="Where the Graph refresh token is cached (default: ~/.ct_expired_bot/graph-token.json, mode 0600).")
+    p.add_argument("--graph-login", action="store_true", help="Sign into Microsoft Graph once via device code, cache the token, print the mailbox, then exit.")
     p.add_argument("--sender", default=None, help="Restrict the alert search to this From: address.")
     p.add_argument("--output-dir", default=".", help="Where skiptrace-YYYY-MM-DD.csv and review-YYYY-MM-DD.csv are written.")
     p.add_argument("--csv-headers", default=None, help=f"Your vendor's exact headers, comma-separated, in this order: {', '.join(CANONICAL_FIELDS)}")
@@ -72,6 +76,9 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
         imap_host=args.imap_host,
         imap_user=args.imap_user,
         imap_password=os.environ.get("CT_EXPIRED_IMAP_PASSWORD", ""),
+        graph_client_id=args.graph_client_id,
+        graph_tenant=args.graph_tenant,
+        graph_token_cache=Path(args.graph_token_cache).expanduser() if args.graph_token_cache else None,
         sender_filter=args.sender,
         profile_dir=Path(args.profile_dir).expanduser() if args.profile_dir else None,
         headless=not args.headed,
@@ -120,6 +127,30 @@ async def _main_async(args: argparse.Namespace) -> int:
             await run_login_flow(playwright, profile_dir=config.profile_dir)
         return 0
 
+    if args.graph_login:
+        from .graph_mail import GraphAuthError, acquire_token, describe_mailbox
+
+        if not (config.graph_client_id and config.graph_tenant):
+            print(
+                "--graph-login needs --graph-client-id and --graph-tenant (see the "
+                "app-registration steps in ct_expired_bot/graph_mail.py).",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            acquire_token(
+                config.graph_client_id, config.graph_tenant,
+                cache_path=config.graph_token_cache, interactive=True,
+            )
+            mailbox = describe_mailbox(
+                config.graph_client_id, config.graph_tenant, cache_path=config.graph_token_cache
+            )
+        except GraphAuthError as exc:
+            print(f"Graph sign-in failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Signed in. Reading mail as: {mailbox}")
+        return 0
+
     if args.seed_portals:
         written = await seed_portal_registry(config, verify=args.verify_portals)
         print(f"Town Portals: {written} rows written to {config.master_path}")
@@ -128,10 +159,14 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.mls:
         return await _single_mls(args, config)
 
-    if not config.alerts_dir and not (config.imap_host and config.imap_user):
+    has_graph = bool(config.graph_client_id and config.graph_tenant)
+    has_imap = bool(config.imap_host and config.imap_user)
+    if not config.alerts_dir and not has_graph and not has_imap:
         print(
-            "Nothing to read. Pass --alerts-dir with saved alert emails, or "
-            "--imap-host/--imap-user (with CT_EXPIRED_IMAP_PASSWORD set).",
+            "Nothing to read. Pass one of:\n"
+            "  --graph-client-id/--graph-tenant  (Microsoft 365 mailbox -- run --graph-login first)\n"
+            "  --alerts-dir DIR                  (saved .eml/.html alert files)\n"
+            "  --imap-host/--imap-user           (IMAP; not available on Exchange Online)",
             file=sys.stderr,
         )
         return 2

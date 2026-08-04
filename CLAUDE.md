@@ -108,12 +108,28 @@ deliberately stores no credentials. Run it locally:
 
 ```
 python -m ct_expired_bot --login              # once, sign into SmartMLS
+python -m ct_expired_bot --graph-login \      # once, sign into M365 mail
+  --graph-client-id <app id> --graph-tenant <tenant id>
 python -m ct_expired_bot --seed-portals --master "CT-Expired-Master.xlsx"
 python -m ct_expired_bot \
   --master "~/Documents/Expired Leads/CT-Expired-Master.xlsx" \
-  --alerts-dir ~/Downloads/smartmls-alerts \
+  --graph-client-id <app id> --graph-tenant <tenant id> \
   --csv-headers "<vendor's exact headers, 10 of them>"
 ```
+
+### Reading the alert emails
+
+The operator's mail is on Exchange Online (`newerainvesting.com` MX ->
+`*.mail.protection.outlook.com`), and Microsoft disabled basic-auth
+IMAP there -- `alerts.load_from_imap` cannot authenticate against it no
+matter what password it is given. Use `graph_mail.py` (Microsoft Graph,
+OAuth2 device-code, public client, `Mail.Read` delegated). The Entra ID
+app-registration steps are in that module's docstring.
+
+`--alerts-dir` (saved `.eml`/`.html` files) still works and needs no
+auth at all; it is the fallback when Graph is unavailable, at the cost
+of being a manual step every run. The IMAP path is kept for a future
+non-Microsoft mailbox, not because it works today.
 
 ### What is verified vs. what is a guess
 
@@ -156,4 +172,4 @@ Still unconfirmed, and marked as such in the module docstrings:
   reordered sheet does not shuffle them.
 - `N/A` means the source did not print it. Nothing is estimated.
 
-Tests: `python -m unittest discover -s tests -v` (35 tests, no network).
+Tests: `python -m unittest discover -s tests -v` (41 tests, no network).

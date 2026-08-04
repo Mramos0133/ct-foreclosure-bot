@@ -344,3 +344,75 @@ class TestWorkbook(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGraphMail(unittest.TestCase):
+    """Offline coverage of the Graph payload handling.
+
+    The auth flow and the live query are not tested here -- they need a
+    real tenant. What is tested is the part that turns Microsoft's JSON
+    into alert rows, and the $filter string, since a malformed filter
+    silently returns the whole mailbox instead of erroring.
+    """
+
+    def test_message_to_listings_parses_body(self):
+        from ct_expired_bot.graph_mail import message_to_listings
+
+        message = {
+            "id": "AAMkAGI2abc",
+            "subject": "SmartMLS Listing Alert",
+            "receivedDateTime": "2026-08-03T11:30:00Z",
+            "from": {"emailAddress": {"address": "alerts@smartmls.com"}},
+            "body": {"contentType": "html", "content": (
+                "<table><tr><td>Expired</td><td>24012345</td>"
+                "<td>19 Abel Avenue</td><td>06906</td></tr></table>"
+            )},
+        }
+        listings = message_to_listings(message)
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(listings[0].mls_no, "24012345")
+        self.assertEqual(listings[0].status, "expired")
+        self.assertEqual(listings[0].zip_code, "06906")
+        self.assertEqual(listings[0].received_at, "2026-08-03T11:30:00Z")
+        self.assertIn("alerts@smartmls.com", listings[0].source_email)
+
+    def test_subject_filter_is_applied_client_side(self):
+        from ct_expired_bot.graph_mail import message_to_listings
+
+        message = {
+            "id": "x", "subject": "Lunch tomorrow?",
+            "receivedDateTime": "2026-08-03T11:30:00Z",
+            "body": {"content": "<table><tr><td>Expired</td><td>24012345</td>"
+                                "<td>19 Abel Avenue</td></tr></table>"},
+        }
+        self.assertEqual(message_to_listings(message, subject_filter="SmartMLS"), [])
+        self.assertEqual(len(message_to_listings(message, subject_filter="")), 1)
+
+    def test_empty_body_yields_nothing(self):
+        from ct_expired_bot.graph_mail import message_to_listings
+
+        self.assertEqual(message_to_listings({"id": "x", "subject": "SmartMLS"}), [])
+
+    def test_filter_string_shape(self):
+        from datetime import datetime, timezone
+        from ct_expired_bot.graph_mail import _messages_url
+
+        url = _messages_url(datetime(2026, 8, 1, tzinfo=timezone.utc), "alerts@smartmls.com")
+        self.assertIn("receivedDateTime+ge+2026-08-01T00%3A00%3A00Z", url)
+        self.assertIn("from%2FemailAddress%2Faddress+eq+%27alerts%40smartmls.com%27", url)
+        # Subject must NOT be in $filter -- Graph rejects contains() there.
+        # ($filter arrives percent-encoded as %24filter.)
+        filter_clause = url.split("%24filter=")[-1]
+        self.assertNotIn("subject", filter_clause)
+        self.assertIn("receivedDateTime", filter_clause)
+
+    def test_filter_omitted_when_no_constraints(self):
+        from ct_expired_bot.graph_mail import _messages_url
+
+        self.assertNotIn("%24filter", _messages_url(None, None))
+
+    def test_single_quote_in_sender_is_escaped(self):
+        from ct_expired_bot.graph_mail import _messages_url
+
+        url = _messages_url(None, "o'brien@example.com")
+        self.assertIn("o%27%27brien", url)
