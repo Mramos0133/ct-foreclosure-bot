@@ -87,30 +87,75 @@ def is_reopen_after_bankruptcy(entry_text: str) -> bool:
 # the bankruptcy-then-reopened detection above: a docket entry showing the
 # owner entered the program, followed anywhere after it by an entry that
 # signals the program didn't stick and the foreclosure/auction is moving
-# again. NOTE: unlike the bankruptcy patterns above (confirmed against
-# real dockets), these EMAP/loan-mod phrasings are a best-effort guess at
-# how CT's civilinquiry docket actually labels these entries -- flag any
-# case caught by this rule for a quick human sanity-check against the
-# real docket text until that's confirmed.
+# again.
+#
+# These patterns WERE a best-effort guess; they have since been checked
+# against every MEDIAT/EMAP entry across 360 real Milford/Bridgeport/
+# Stratford dockets, and the guess was wrong in both directions:
+#
+#   - Over-matching. CT files mediation paperwork on essentially every
+#     foreclosure, so a bare "FORECLOSURE MEDIATION" test fired on ~197
+#     of 360 dockets. The worst of it: "FORECLOSURE MEDIATION - INELIGIBLE
+#     CASE" (158 hits) counted as *entering* a program the case was
+#     explicitly ruled ineligible for, and "AFFIDAVIT OF COMPLIANCE WITH
+#     EMAP" (96 hits) -- the lender attesting it sent the required EMAP
+#     notice -- counted as the owner entering EMAP.
+#   - Under-matching the ending. The real termination entry is
+#     "FORECLOSURE MEDIATION TIME PERIOD EXPIRED" (138 hits); the old
+#     pattern only recognized "MEDIATION PERIOD TERMINATED" (30 hits),
+#     missing 82% of real terminations.
+#
+# Entry now requires an affirmative opt-in or assignment; the routine
+# administrative and compliance filings are excluded explicitly.
 EMAP_PATTERN = re.compile(r"\bEMAP\b|EMERGENCY\s+MORTGAGE\s+ASSISTANCE")
 LOAN_MODIFICATION_PROGRAM_PATTERN = re.compile(
-    r"LOAN\s+MODIFICATION|FORECLOSURE\s+MEDIATION|LOSS\s+MITIGATION"
+    r"LOAN\s+MODIFICATION"
+    r"|LOSS\s+MITIGATION"
+    r"|MEDIATION\s+REQUEST"
+    r"|REQUEST/CERTIFICATE"
+    r"|JD-CV-108"
+    r"|ORDER\s+ASSIGNED\s+TO\s+(PRE)?MEDIATION"
+)
+# Administrative/compliance chatter that mentions a program without the
+# owner having entered one -- checked before the entry patterns above.
+PROGRAM_ENTRY_EXCLUDES = re.compile(
+    r"INELIGIBLE"
+    r"|COMPLIANCE\s+WITH"
+    r"|AFFIDAVIT\s+OF\s+COMPLIANCE"
+    r"|ELIGIBLE\s+CASE"          # auto-generated eligibility flag, not an opt-in
+    r"|OBJECTION"
+    r"|\bMOTION\s+TO\s+EXTEND\b"
+    r"|MODIFICATION\s+OF\s+MEDIATION\s+PERIOD"  # JD-CV-96 scheduling motion, not a loan mod
 )
 
-# A few EMAP/loan-mod-specific failure signals beyond the ones already
-# covered by find_target_motions() (Motion for Judgment-Strict/By Sale,
-# Motion to Open Judgment, Law Day) and is_reopen_after_bankruptcy()
-# (Reset Law Days / Reopen) -- both of those are reused below since "the
-# case is moving toward foreclosure/auction again" means the same thing
-# regardless of whether a bankruptcy or an EMAP/loan-mod stay preceded it.
+# Program-failure signals beyond those already covered by
+# find_target_motions() (Motion for Judgment-Strict/By Sale, Motion to
+# Open Judgment, Law Day) and is_reopen_after_bankruptcy() (Reset Law
+# Days / Reopen) -- both reused below, since "the case is moving toward
+# foreclosure/auction again" means the same thing regardless of which
+# kind of stay preceded it. The two MEDIATION_ENDED_PATTERN forms are the
+# exact strings CT uses; see the note above.
+MEDIATION_ENDED_PATTERN = re.compile(
+    r"MEDIATION\s+TIME\s+PERIOD\s+EXPIRED"
+    r"|MEDIATION\s+PERIOD\s+(TERMINATED|EXPIRED|ENDED|CLOSED)"
+)
 PROGRAM_FAILURE_PATTERN = re.compile(
     r"MOTION\s+TO\s+DENY"
     r"|\bDENIED\b"
     r"|MOTION\s+TO\s+RESUME"
     r"|MOTION\s+TO\s+REACTIVATE"
-    r"|MEDIATION\s+(PERIOD\s+)?(CLOSED|TERMINATED|ENDED)"
     r"|EMAP\s+(APPLICATION\s+)?DENIED"
+    r"|MEDIATION\s+TIME\s+PERIOD\s+EXPIRED"
+    r"|MEDIATION\s+PERIOD\s+(TERMINATED|EXPIRED|ENDED|CLOSED)"
 )
+
+
+def is_mediation_ended(entry_text: str) -> bool:
+    """True for the two entries CT actually files when the mediation
+    period stops: "FORECLOSURE MEDIATION TIME PERIOD EXPIRED" and
+    "FORECLOSURE MEDIATOR'S FINAL REPORT - MEDIATION PERIOD TERMINATED".
+    """
+    return bool(MEDIATION_ENDED_PATTERN.search(normalize(entry_text)))
 
 
 # Recent-lender-complaint detection (see lead_ranking.py for the HOT rule
@@ -148,13 +193,20 @@ def is_lender_plaintiff(case_caption: str) -> bool:
 
 
 def program_entry_label(entry_text: str) -> str | None:
-    """"EMAP" | "Loan Modification" | None for one docket entry -- first
-    match wins if an entry text somehow contains both phrasings.
+    """"EMAP" | "Foreclosure Mediation" | "Loan Modification" | None for
+    one docket entry. Administrative/compliance filings that merely
+    mention a program are excluded first -- see PROGRAM_ENTRY_EXCLUDES.
     """
     norm = normalize(entry_text)
+    if PROGRAM_ENTRY_EXCLUDES.search(norm):
+        return None
     if EMAP_PATTERN.search(norm):
         return "EMAP"
     if LOAN_MODIFICATION_PROGRAM_PATTERN.search(norm):
+        # Mediation and a servicer loan-mod are different programs and
+        # read differently on a call; don't collapse them into one label.
+        if "MEDIATION" in norm:
+            return "Foreclosure Mediation"
         return "Loan Modification"
     return None
 
