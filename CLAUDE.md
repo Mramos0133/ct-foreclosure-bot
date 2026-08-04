@@ -1,5 +1,12 @@
 # CT Foreclosure Bot
 
+This repo now holds two separate bots:
+
+- `ct_foreclosure_bot/` -- court-docket foreclosure scraper (the original;
+  everything below the "Lead classification rules" heading is about this one)
+- `ct_expired_bot/` -- expired/withdrawn MLS listing -> skip-trace pipeline
+  (see "Expired listing bot" at the bottom)
+
 ## "Give me the updated leads" workflow
 
 Whenever the user asks for updated/refreshed leads, run the `--update`
@@ -86,3 +93,67 @@ case if one shows up in a future run.
   despite `.gitignore`'s general `*.sqlite3` rule -- see its own commit
   history). All other checkpoint/results/review files for this dataset
   are derived/regeneratable and gitignored.
+
+## Expired listing bot (`ct_expired_bot/`)
+
+Separate product from the foreclosure scraper: takes SmartMLS
+expired/withdrawn/canceled alert emails, pulls listing detail, resolves
+the owner from the town assessor's card, scores the lead, and writes a
+skip-trace-ready CSV plus an append-only master workbook.
+
+**It cannot run in this cloud environment**, and that is by design, not a
+bug to fix. Step 2 needs a live authenticated SmartMLS session, which
+lives in a browser profile on the operator's own machine; the bot
+deliberately stores no credentials. Run it locally:
+
+```
+python -m ct_expired_bot --login              # once, sign into SmartMLS
+python -m ct_expired_bot --seed-portals --master "CT-Expired-Master.xlsx"
+python -m ct_expired_bot \
+  --master "~/Documents/Expired Leads/CT-Expired-Master.xlsx" \
+  --alerts-dir ~/Downloads/smartmls-alerts \
+  --csv-headers "<vendor's exact headers, 10 of them>"
+```
+
+### What is verified vs. what is a guess
+
+Verified live on 2026-08-04, with tests pinned to the observed values:
+
+- **Vision/VGSI assessor cards.** Element IDs in `assessor.py` were read
+  off a real card and re-confirmed end-to-end (owner, mailing address,
+  assessed value, sale date/price, year built, living area, beds/baths).
+- **Which CT towns are on Vision.** All 169 probed; 77 answered. The list
+  in `portals.VGSI_TOWNS` is that probe result, not a guess. The other 92
+  towns resolve to Unknown and get discovered on first encounter.
+- **Owner name ordering.** Assessor cards print `LAST FIRST`, *not*
+  `FIRST LAST` -- 'CARTWRIGHT ANGELA', 'MELECIO JAMIE K'. Reading them
+  the other way reverses every name sent to the vendor. `names.py` takes
+  an explicit `order` for this reason; do not "simplify" it away.
+- **The TLS 1.2 workaround** in `browser.py` is required here for the
+  same proxy reason as `ct_foreclosure_bot/browser.py` -- without it,
+  every gis.vgsi.com load fails ERR_CONNECTION_RESET.
+
+Still unconfirmed, and marked as such in the module docstrings:
+
+- `alerts.py` -- the SmartMLS alert email layout. Needs one pass against
+  a real alert; everything downstream is source-agnostic, so only this
+  file should need to change.
+- `mls.py` -- the Matrix detail-page labels. Confirm with
+  `--mls <number> --dump-html out.html`, then fix `LABELS` or pass
+  `--label-overrides labels.json`.
+- Only Vision is implemented for Step 3. Towns on QDS / Northeast /
+  Tyler / custom sites return `PORTAL_UNAVAILABLE` and land in the review
+  file rather than getting a guessed-at scrape.
+
+### Rules that must not be relaxed
+
+- A row whose owner could not be confirmed is `NEEDS_MANUAL_REVIEW` and
+  goes to `review-YYYY-MM-DD.csv`, never to the vendor CSV. Never pick
+  the closest-matching parcel.
+- The seven operator columns on the Leads tab (`Skip Trace Sent`,
+  `Phone 1`, `Phone 2`, `Email`, `Call Attempts`, `Outcome`, `My Notes`)
+  are never written by the bot. Appends are header-addressed so a
+  reordered sheet does not shuffle them.
+- `N/A` means the source did not print it. Nothing is estimated.
+
+Tests: `python -m unittest discover -s tests -v` (35 tests, no network).
