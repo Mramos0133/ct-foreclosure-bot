@@ -28,6 +28,7 @@ from .lead_ranking import (
     classify_case, decide_bucket, finalize_key_date,
     finalize_judgment_granted, finalize_bankruptcy_chapter,
     is_bankruptcy_reopen_hot, is_assistance_program_hot, is_recent_complaint_hot,
+    short_sale_ratio, equity_bucket_override,
 )
 from .models import CaseResult
 from .motions import is_extend_sale_date_or_law_day, is_granted
@@ -180,17 +181,16 @@ async def process_case(
 
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
 
-    # Short-sale override: total debt plus subsequent-lien encumbrances
-    # exceeding 85% of appraised value means there's little/no equity
-    # cushion left for a standard purchase -- moved to its own tab instead
-    # of wherever it would have otherwise landed (HOT/WARM/COLD/
-    # UNCLASSIFIED), per explicit request. Only evaluated when both figures
-    # are actually known; a missing appraised value (or one of zero) can't
-    # support a ratio.
-    if total_debt is not None and appraised_value is not None and appraised_value > 0:
-        short_sale_ratio = (total_debt + (encumbrances_numeric or 0)) / appraised_value
-        if short_sale_ratio > 0.85:
-            ranking.lead_bucket = "POTENTIAL_SHORT_SALE"
+    # Equity override, applied last because it outranks every distress
+    # signal (per explicit instruction): debt + subsequent encumbrances
+    # over 75% of appraised value goes COLD, over 85% goes to the
+    # short-sale tab. Only evaluated when both figures are actually known;
+    # a missing appraised value (or one of zero) can't support a ratio, and
+    # a case shouldn't be penalized for a figure we failed to extract.
+    ratio = short_sale_ratio(total_debt, appraised_value, encumbrances_numeric)
+    forced = equity_bucket_override(ratio)
+    if forced:
+        ranking.lead_bucket = forced
 
     # For recent-lender-complaint cases, OCR the complaint pleading itself
     # for the principal balance owed and the P&I-unpaid-since date -- only
@@ -227,6 +227,12 @@ async def process_case(
         complaint_principal_amount=complaint_principal,
         complaint_unpaid_since=complaint_unpaid_since,
         recent_complaint_hot=ranking.recent_complaint_hot,
+        assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=analysis.assistance_elapsed_date,
+        probate_case=analysis.probate_case,
+        probate_signal=analysis.probate_signal,
+        estate_of=analysis.estate_of,
+        heirs=analysis.heirs,
         today=today,
     )
 
@@ -284,6 +290,16 @@ async def process_case(
         complaint_principal_amount=complaint_principal,
         complaint_unpaid_since=complaint_unpaid_since,
         recent_complaint_hot=ranking.recent_complaint_hot,
+        recent_complaint_warm=ranking.recent_complaint_warm,
+        assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=(
+            analysis.assistance_elapsed_date.isoformat()
+            if analysis.assistance_elapsed_date else None
+        ),
+        probate_case=analysis.probate_case,
+        probate_signal=analysis.probate_signal,
+        estate_of=analysis.estate_of,
+        heirs="; ".join(analysis.heirs),
         continuance_count=ranking.continuance_count,
         warm_cold_subflag=ranking.warm_cold_subflag,
         case_summary=case_summary,
@@ -424,6 +440,12 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
         complaint_principal_amount=result.complaint_principal_amount,
         complaint_unpaid_since=result.complaint_unpaid_since,
         recent_complaint_hot=recent_complaint_hot,
+        assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=analysis.assistance_elapsed_date,
+        probate_case=analysis.probate_case,
+        probate_signal=analysis.probate_signal,
+        estate_of=analysis.estate_of,
+        heirs=analysis.heirs,
         today=today,
     )
     return dataclasses.replace(
@@ -442,6 +464,15 @@ async def backfill_case_summary(context: BrowserContext, throttle: Throttle, res
             analysis.complaint_filed_date.isoformat() if analysis.complaint_filed_date else None
         ),
         recent_complaint_hot=recent_complaint_hot,
+        assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=(
+            analysis.assistance_elapsed_date.isoformat()
+            if analysis.assistance_elapsed_date else None
+        ),
+        probate_case=analysis.probate_case,
+        probate_signal=analysis.probate_signal,
+        estate_of=analysis.estate_of,
+        heirs="; ".join(analysis.heirs),
     )
 
 

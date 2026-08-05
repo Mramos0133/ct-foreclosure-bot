@@ -158,6 +158,47 @@ def is_mediation_ended(entry_text: str) -> bool:
     return bool(MEDIATION_ENDED_PATTERN.search(normalize(entry_text)))
 
 
+# --- Loan-assistance clock -------------------------------------------
+# Drives the HOT/WARM split on complaint-stage cases (see lead_ranking.py):
+# a new complaint whose assistance window has ELAPSED is HOT (the owner's
+# rescue options are spent and they know it); one still INSIDE the window
+# is WARM (they are actively working a mediation or EMAP application and
+# are not ready to talk about selling).
+#
+# Per explicit instruction the clock is "either signal, whichever appears"
+# -- mediation and EMAP both count -- and it is only ELAPSED once every
+# avenue found on the docket has closed. One still-open avenue keeps the
+# whole case OPEN, which is the conservative read: it keeps a case out of
+# HOT while the owner still has a live lifeline.
+EMAP_STARTED_PATTERN = re.compile(
+    r"\bEMAP\b|EMERGENCY\s+MORTGAGE\s+ASSISTANCE"
+)
+EMAP_ENDED_PATTERN = re.compile(
+    r"EMAP\s+(?:APPLICATION\s+)?(?:DENIED|EXPIRED|WITHDRAWN|TERMINATED)"
+    r"|(?:DENIED|EXPIRED|WITHDRAWN|TERMINATED).{0,30}\bEMAP\b"
+    r"|EMAP\s+(?:TIME\s+)?PERIOD\s+(?:EXPIRED|ENDED|TERMINATED)"
+)
+
+
+def is_assistance_started(entry_text: str) -> bool:
+    """An assistance avenue opened on this entry -- mediation entered (via
+    program_entry_label, which already excludes the routine administrative
+    and compliance filings) or EMAP raised.
+    """
+    norm = normalize(entry_text)
+    if program_entry_label(entry_text) is not None:
+        return True
+    return bool(EMAP_STARTED_PATTERN.search(norm)) and not PROGRAM_ENTRY_EXCLUDES.search(norm)
+
+
+def is_assistance_ended(entry_text: str) -> bool:
+    """An assistance avenue closed on this entry -- mediation period
+    expired/terminated, or EMAP denied/expired/withdrawn.
+    """
+    norm = normalize(entry_text)
+    return bool(MEDIATION_ENDED_PATTERN.search(norm) or EMAP_ENDED_PATTERN.search(norm))
+
+
 # Recent-lender-complaint detection (see lead_ranking.py for the HOT rule
 # built on these). Two independent tests:
 #   1. The docket has a COMPLAINT entry (the case-initiating pleading).

@@ -30,6 +30,14 @@ from .motions import (
     program_entry_label,
     is_complaint_entry,
     is_lender_plaintiff,
+    is_assistance_started,
+    is_assistance_ended,
+)
+from .probate import (
+    is_probate_case,
+    probate_signal,
+    extract_estate_of,
+    extract_heirs,
 )
 
 
@@ -46,6 +54,18 @@ class DocketAnalysis:
     assistance_program_label: str | None = None  # "EMAP" | "Loan Modification"
     assistance_program_failure_entry: DocketEntry | None = None  # most recent motion filed *after* the program entry signaling it failed/expired -- see motions.is_program_failure_motion
     assistance_program_supporting_text: str = ""
+    # Loan-assistance clock, driving the complaint-stage HOT/WARM split
+    # (see lead_ranking.py). "elapsed" only when every avenue found has
+    # closed; one still-open avenue leaves the whole case "open".
+    assistance_state: str = "none"  # "none" | "open" | "elapsed"
+    assistance_started_entries: list[DocketEntry] = field(default_factory=list)
+    assistance_ended_entries: list[DocketEntry] = field(default_factory=list)
+    assistance_elapsed_date: date | None = None  # date the last open avenue closed
+    # Probate / deceased-owner detection (see probate.py)
+    probate_case: bool = False
+    probate_signal: str = ""
+    estate_of: str = ""
+    heirs: list[str] = field(default_factory=list)
     complaint_entry: DocketEntry | None = None  # earliest COMPLAINT docket entry -- see motions.is_complaint_entry
     complaint_filed_date: date | None = None  # date of that entry; falls back to the earliest docket entry's date (case start) when no COMPLAINT entry is labeled
     lender_plaintiff: bool = False  # plaintiff caption reads like a bank/lender -- see motions.is_lender_plaintiff
@@ -155,6 +175,33 @@ def analyze_docket(docket: DocketInfo) -> DocketAnalysis:
             analysis.assistance_program_supporting_text = " | ".join(
                 f"[{e.entry_no or e.file_date}] {e.file_date}: {e.description}" for e in supporting
             )
+
+    # Loan-assistance clock. Counts mediation and EMAP alike ("either
+    # signal, whichever appears"), and only reports "elapsed" once the
+    # last avenue has closed -- an avenue opened *after* the most recent
+    # closure means the owner is back inside a live assistance window.
+    analysis.assistance_started_entries = [e for e in entries if is_assistance_started(e.description)]
+    analysis.assistance_ended_entries = [e for e in entries if is_assistance_ended(e.description)]
+    if analysis.assistance_ended_entries or analysis.assistance_started_entries:
+        last_start = max(
+            (_parse_date(e.file_date) for e in analysis.assistance_started_entries if _parse_date(e.file_date)),
+            default=None,
+        )
+        last_end = max(
+            (_parse_date(e.file_date) for e in analysis.assistance_ended_entries if _parse_date(e.file_date)),
+            default=None,
+        )
+        if last_end is not None and (last_start is None or last_end >= last_start):
+            analysis.assistance_state = "elapsed"
+            analysis.assistance_elapsed_date = last_end.date()
+        else:
+            analysis.assistance_state = "open"
+
+    analysis.probate_case = is_probate_case(docket.case_caption, entries)
+    if analysis.probate_case:
+        analysis.probate_signal = probate_signal(docket.case_caption, entries)
+        analysis.estate_of = extract_estate_of(docket.case_caption)
+        analysis.heirs = extract_heirs(docket.case_caption, entries)
 
     analysis.lender_plaintiff = is_lender_plaintiff(docket.case_caption)
     complaint_entries = [e for e in entries if is_complaint_entry(e.description)]

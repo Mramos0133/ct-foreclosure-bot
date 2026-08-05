@@ -65,6 +65,44 @@ Two staleness fixes the script applies, worth knowing about:
   -- on the last pull this filled in three sale dates that showed as
   blank, two of which were only days away.
 
+## Standard operating procedure for every data pull
+
+These apply to ALL pulls -- statewide updates and city pulls alike. They
+are implemented in code, so following the normal commands is enough; this
+section exists so the reasoning is not lost.
+
+1. **Probate / heirs are identified up front.** Every case is checked for
+   a deceased owner (`probate.py`) from both the caption and the docket
+   entries -- the docket check matters because an owner who died
+   mid-case leaves the caption looking perfectly normal. The sheet gets
+   Probate (Y/N), the signal that triggered it, the deceased owner's
+   name, and the fiduciary/heirs to contact, and the same appears as the
+   FIRST line of Summary of Case, because it changes *who* is contacted
+   before anyone knocks or calls.
+   Heir names are best-effort: a caption reading "THE WIDOW, HEIRS ... OF
+   JOHN SMITH" names nobody, so the cell is deliberately left empty with
+   a note rather than filled with a guess.
+
+2. **Equity outranks distress.** (debt + subsequent encumbrances) as a
+   share of appraised value:
+   - `> 75%` (`COLD_RATIO`) -> **COLD**
+   - `> 85%` (`SHORT_SALE_RATIO`) -> **POTENTIAL_SHORT_SALE**
+   Both override every HOT/WARM distress signal -- no equity means no
+   deal however motivated the owner. Applied only when debt AND appraised
+   value are both known; a case is never penalized for a figure the OCR
+   failed to read.
+
+3. **Complaint-stage leads split on the loan-assistance clock.** A recent
+   lender complaint is no longer HOT on its own:
+   - complaint + assistance **elapsed or absent** -> **HOT** (options
+     spent, owner reachable and out of alternatives)
+   - complaint + assistance **still open** -> **WARM** (owner is working
+     a rescue and won't discuss selling; converts to HOT by itself once
+     the window closes)
+   The clock counts mediation AND EMAP -- whichever appears on the docket
+   -- and only reads "elapsed" once every avenue found has closed. An
+   avenue opened after the last closure puts the case back to "open".
+
 ## Lead classification rules
 
 See the module docstring in `lead_ranking.py` for the full HOT/WARM/COLD

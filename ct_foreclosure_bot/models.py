@@ -90,7 +90,17 @@ class CaseResult:
     complaint_doc_url: str | None = None
     complaint_principal_amount: float | None = None  # principal balance owed per the complaint's own text (OCR, best-effort)
     complaint_unpaid_since: str | None = None  # date P&I unpaid since, per the complaint (ISO if parsed, else raw matched text)
-    recent_complaint_hot: bool = False  # lender complaint within the 6-month HOT window
+    recent_complaint_hot: bool = False  # recent lender complaint AND assistance clock spent/absent
+    recent_complaint_warm: bool = False  # recent lender complaint BUT assistance still running
+    # Loan-assistance clock: "none" | "open" | "elapsed" -- drives the
+    # complaint-stage HOT/WARM split, see lead_ranking.py
+    assistance_state: str = "none"
+    assistance_elapsed_date: str | None = None  # ISO, date the last open avenue closed
+    # Probate / deceased-owner fields (see probate.py)
+    probate_case: bool = False
+    probate_signal: str = ""  # short reason the case was flagged
+    estate_of: str = ""  # deceased owner's name when the caption says "ESTATE OF X"
+    heirs: str = ""  # "; "-joined best-effort list of fiduciary/heirs to contact
     continuance_count: int = 0
     warm_cold_subflag: bool = False  # COLD sub-segment: 3+ continuances, no bankruptcy, non-appearing
     # Contact-tracing fields (see case_analysis.py: Return of Service,

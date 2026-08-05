@@ -32,8 +32,13 @@ Buckets and the reasoning behind each (as specified by the user):
           motions.py.
 
           ALSO HOT (per explicit request): a bank/lender filed the
-          foreclosure complaint recently -- on/after July 1, 2026
-          (RECENT_COMPLAINT_MIN_FILED_DATE, a hard floor requested to
+          foreclosure complaint recently AND the owner's loan-assistance
+          window has already closed (assistance_state != "open" -- either
+          a mediation/EMAP avenue opened and has since expired or been
+          terminated, or the docket shows no assistance activity at all).
+          A recent complaint whose assistance is still running goes WARM
+          instead, not HOT -- see below. "Recently" means on/after July 1,
+          2026 (RECENT_COMPLAINT_MIN_FILED_DATE, a hard floor requested to
           keep the pre-July backlog out of HOT) and within the last
           RECENT_COMPLAINT_HOT_MAX_MONTHS (6) months. This is the
           earliest-stage lead type: no judgment motion needs to exist
@@ -44,7 +49,14 @@ Buckets and the reasoning behind each (as specified by the user):
           for the principal balance owed and the date since which P&I
           has gone unpaid (see complaint_document.py); both go on the
           spreadsheet row.
-  WARM -- a bankruptcy stay was filed and the judgment has since been
+  WARM -- a recent lender complaint (as defined above) where the owner is
+          still INSIDE a live loan-assistance window: a mediation or EMAP
+          avenue is open and has not expired or been terminated. Real
+          distress and worth tracking, but an owner actively working a
+          rescue is not ready to discuss selling; they convert to HOT
+          automatically once that window closes.
+
+          ALSO WARM -- a bankruptcy stay was filed and the judgment has since been
           reopened, but the bankruptcy filing date is outside the HOT
           2-12-month window above (or couldn't be parsed). Real distress
           signal, but messier: another stay is possible, and the owner
@@ -53,7 +65,16 @@ Buckets and the reasoning behind each (as specified by the user):
           rep). Chapter 7 (liquidation) vs. Chapter 13 (repayment plan,
           may still be trying to keep the house) changes the read on this
           case, so it's flagged.
-  COLD -- the sale/law day has been extended multiple times. Deprioritized
+  COLD -- (debt + subsequent encumbrances) exceeds COLD_RATIO (75%) of
+          appraised value: too little equity left for a standard purchase
+          to pencil. Above SHORT_SALE_RATIO (85%) the case is deep enough
+          underwater to be worth working as a short sale instead and goes
+          to POTENTIAL_SHORT_SALE. Both thresholds OVERRIDE every distress
+          bucket above (per explicit instruction: no equity means no deal,
+          however motivated the owner) -- see equity_bucket_override(),
+          applied in pipeline.py after decide_bucket().
+
+          ALSO COLD -- the sale/law day has been extended multiple times. Deprioritized
           by default (heavily shopped by every other investor watching the
           auction site), except for a sub-segment worth a second look:
           3+ extensions with no bankruptcy filed and no appearance --
@@ -103,6 +124,14 @@ ASSISTANCE_PROGRAM_HOT_MAX_MONTHS = 12
 RECENT_COMPLAINT_HOT_MAX_MONTHS = 6
 RECENT_COMPLAINT_MIN_FILED_DATE = date(2026, 7, 1)
 
+# Equity thresholds on (debt + subsequent encumbrances) / appraised value.
+# Above COLD_RATIO there is too little equity left for a standard purchase
+# to pencil; above SHORT_SALE_RATIO the case is deep enough underwater to
+# be worth working as a short sale instead. Both override the distress
+# buckets -- see equity_bucket_override().
+COLD_RATIO = 0.75
+SHORT_SALE_RATIO = 0.85
+
 
 def months_between(earlier: date, later: date) -> int:
     """Whole calendar months elapsed from `earlier` to `later` (>= 0 when
@@ -130,12 +159,48 @@ def is_assistance_program_hot(entered_date: date | None, today: date) -> bool:
     return ASSISTANCE_PROGRAM_HOT_MIN_MONTHS <= months <= ASSISTANCE_PROGRAM_HOT_MAX_MONTHS
 
 
-def is_recent_complaint_hot(complaint_filed_date: date | None, lender_plaintiff: bool, today: date) -> bool:
+def is_recent_complaint(complaint_filed_date: date | None, lender_plaintiff: bool, today: date) -> bool:
+    """Recent lender-filed complaint. On its own this is now only the
+    *entry ticket* to the complaint-stage rules -- decide_bucket() splits
+    it HOT/WARM on the loan-assistance clock.
+    """
     if not lender_plaintiff or complaint_filed_date is None or complaint_filed_date > today:
         return False
     if complaint_filed_date < RECENT_COMPLAINT_MIN_FILED_DATE:
         return False
     return months_between(complaint_filed_date, today) <= RECENT_COMPLAINT_HOT_MAX_MONTHS
+
+
+# Kept as the pipeline's match trigger: a complaint-stage case is worth
+# processing regardless of which side of the assistance clock it lands on,
+# since the bucket is only decided later once the docket has been read.
+is_recent_complaint_hot = is_recent_complaint
+
+
+def short_sale_ratio(total_debt, appraised_value, encumbrances) -> float | None:
+    """(debt + subsequent encumbrances) / appraised value, or None when
+    either figure is unknown or the appraisal is zero.
+    """
+    if total_debt is None or appraised_value is None or appraised_value <= 0:
+        return None
+    return (total_debt + (encumbrances or 0)) / appraised_value
+
+
+def equity_bucket_override(ratio: float | None) -> str | None:
+    """The equity math outranks every distress signal (per explicit
+    instruction): no equity means no deal, however motivated the owner.
+    Returns the bucket to force, or None to leave the bucket alone.
+
+      > SHORT_SALE_RATIO (0.85)  -> POTENTIAL_SHORT_SALE
+      > COLD_RATIO       (0.75)  -> COLD
+    """
+    if ratio is None:
+        return None
+    if ratio > SHORT_SALE_RATIO:
+        return "POTENTIAL_SHORT_SALE"
+    if ratio > COLD_RATIO:
+        return "COLD"
+    return None
 
 
 @dataclass
@@ -160,7 +225,10 @@ class RankingInfo:
     assistance_program_hot: bool = False  # program-then-failed AND within the 1-12 month HOT window
     complaint_filed_date: date | None = None
     lender_plaintiff: bool = False
-    recent_complaint_hot: bool = False  # lender-filed complaint within the 6-month HOT window
+    recent_complaint_hot: bool = False  # recent lender complaint AND assistance clock spent/absent
+    recent_complaint_warm: bool = False  # recent lender complaint BUT assistance still running
+    assistance_state: str = "none"  # "none" | "open" | "elapsed" -- see case_analysis/motions
+    probate_case: bool = False
 
 
 def count_continuances(entries: list[DocketEntry]) -> int:
@@ -239,6 +307,8 @@ def classify_case(
         assistance_program_failure_present=analysis.assistance_program_failure_entry is not None,
         complaint_filed_date=analysis.complaint_filed_date,
         lender_plaintiff=analysis.lender_plaintiff,
+        assistance_state=analysis.assistance_state,
+        probate_case=analysis.probate_case,
     )
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
     return ranking
@@ -269,12 +339,24 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: d
     ranking.assistance_program_hot = ranking.assistance_program_failure_present and is_assistance_program_hot(
         ranking.assistance_program_entered_date, today
     )
-    ranking.recent_complaint_hot = is_recent_complaint_hot(
+    # A recent lender complaint alone is no longer enough for HOT. It now
+    # splits on the loan-assistance clock (per explicit instruction):
+    # assistance spent -> HOT, assistance still running -> WARM. The read
+    # is that an owner mid-mediation or mid-EMAP is working their rescue
+    # and won't discuss selling, while one whose options just closed is
+    # both reachable and out of alternatives. "none" (no assistance
+    # activity on the docket at all) stays HOT -- there is no live
+    # lifeline to wait out.
+    recent_complaint = is_recent_complaint(
         ranking.complaint_filed_date, ranking.lender_plaintiff, today
     )
+    ranking.recent_complaint_hot = recent_complaint and ranking.assistance_state != "open"
+    ranking.recent_complaint_warm = recent_complaint and ranking.assistance_state == "open"
 
     if ranking.bankruptcy_reopen_hot or ranking.assistance_program_hot or ranking.recent_complaint_hot:
         ranking.lead_bucket = "HOT"
+    elif ranking.recent_complaint_warm:
+        ranking.lead_bucket = "WARM"
     elif bankruptcy_stay_reopened:
         ranking.lead_bucket = "WARM"
     elif ranking.continuance_count >= 2:

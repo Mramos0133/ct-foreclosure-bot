@@ -83,6 +83,12 @@ def build_case_summary(
     complaint_principal_amount: float | None = None,
     complaint_unpaid_since: str | None = None,
     recent_complaint_hot: bool = False,
+    assistance_state: str = "none",
+    assistance_elapsed_date: date | None = None,
+    probate_case: bool = False,
+    probate_signal: str = "",
+    estate_of: str = "",
+    heirs: list[str] | None = None,
     today: date | None = None,
 ) -> str:
     """Return a "\\n"-joined bullet list: current status facts (auction
@@ -149,6 +155,21 @@ def build_case_summary(
     # they in bankruptcy right now," which matter even if that entry
     # itself didn't make the recent-actions cut.
     lines = []
+    # Probate first: it changes WHO gets contacted, so it has to be the
+    # first thing read before any call or door knock.
+    if probate_case:
+        who = f" -- deceased owner: {estate_of}" if estate_of else ""
+        lines.append(f"- PROBATE/ESTATE CASE{who} ({probate_signal})" if probate_signal
+                     else f"- PROBATE/ESTATE CASE{who}")
+        if heirs:
+            lines.append(f"- Contact: {'; '.join(heirs)}")
+        else:
+            lines.append("- Heirs not named in the caption -- check the complaint/probate filing for who holds authority to sell")
+    if assistance_state == "open":
+        lines.append("- Loan assistance IN PROGRESS (mediation/EMAP still open) -- WARM: owner is working a rescue, not ready to sell")
+    elif assistance_state == "elapsed":
+        when = f" {assistance_elapsed_date.strftime('%m/%d/%Y')}" if assistance_elapsed_date else ""
+        lines.append(f"- Loan assistance ELAPSED{when} (mediation/EMAP closed) -- options exhausted")
     if recent_complaint_hot and complaint_filed_date:
         months_ago = _months_between(complaint_filed_date, today or date.today())
         when = f"{months_ago} months ago" if months_ago != 1 else "1 month ago"
