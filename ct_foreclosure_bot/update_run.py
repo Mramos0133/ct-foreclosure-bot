@@ -23,12 +23,19 @@ Two phases:
      actually grown, i.e. something genuinely happened on that case.
 """
 
+import dataclasses
 import logging
+from datetime import date
 
 from playwright.async_api import BrowserContext, Page
 
+from .case_analysis import analyze_docket
+from .case_summary import build_case_summary
 from .checkpoint import Checkpoint
 from .docket import fetch_docket
+from .lead_ranking import (
+    RankingInfo, decide_bucket, equity_bucket_override, short_sale_ratio,
+)
 from .models import CaseResult
 from .pipeline import process_case, run_pipeline
 from .throttle import Throttle
@@ -72,6 +79,108 @@ def _meaningfully_different(old: CaseResult, new: CaseResult) -> bool:
     return any(_fields_differ(getattr(old, f), getattr(new, f)) for f in MEANINGFUL_FIELDS)
 
 
+def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> CaseResult:
+    """Re-derive every classification field that needs only the docket
+    page plus figures already on record -- no worksheet/order/complaint
+    refetch.
+
+    This is what lets a RULE change reach every stored case at zero extra
+    request cost. recheck_matched_case() already fetches the docket page
+    for its staleness check, so the docket is in hand either way; the
+    expensive half of a full reprocess is document OCR, and none of the
+    probate / assistance-clock / equity rules need it. Debt and appraised
+    value come off the stored record, so the equity override re-evaluates
+    correctly without re-reading the worksheet.
+
+    Deliberately does NOT touch key_date, judgment_granted, or the
+    financial figures: those come from Order/worksheet OCR, and a case
+    whose docket has not grown cannot have changed them.
+    """
+    ranking = RankingInfo(
+        lead_bucket=old_result.lead_bucket,
+        judgment_granted=old_result.judgment_granted,
+        non_appearing=old_result.non_appearing,
+        on_auction_site=old_result.on_auction_site,
+        key_date=None,
+        key_date_label=old_result.key_date_label,
+        days_to_key_date=old_result.days_to_key_date,
+        bankruptcy_chapter=old_result.bankruptcy_chapter,
+        continuance_count=old_result.continuance_count,
+        warm_cold_subflag=old_result.warm_cold_subflag,
+        order_entry_for_key_date=None,
+        order_entry_for_bankruptcy=None,
+        bankruptcy_filed_date=analysis.bankruptcy_filed_date,
+        assistance_program_entered_date=analysis.assistance_program_entered_date,
+        assistance_program_label=analysis.assistance_program_label,
+        assistance_program_failure_present=analysis.assistance_program_failure_entry is not None,
+        complaint_filed_date=analysis.complaint_filed_date,
+        lender_plaintiff=analysis.lender_plaintiff,
+        assistance_state=analysis.assistance_state,
+        probate_case=analysis.probate_case,
+    )
+    decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
+
+    forced = equity_bucket_override(
+        short_sale_ratio(
+            old_result.total_debt, old_result.appraised_value,
+            old_result.encumbrances_subsequent_to_lien,
+        )
+    )
+    if forced:
+        ranking.lead_bucket = forced
+
+    case_summary = build_case_summary(
+        docket.entries,
+        date.fromisoformat(old_result.key_date) if old_result.key_date else None,
+        old_result.key_date_label, old_result.bankruptcy_chapter, {},
+        bankruptcy_filed_date=analysis.bankruptcy_filed_date,
+        reopen_motion_entry=analysis.reopen_motion_entry,
+        bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,
+        assistance_program_entered_date=analysis.assistance_program_entered_date,
+        assistance_program_label=analysis.assistance_program_label,
+        assistance_program_failure_entry=analysis.assistance_program_failure_entry,
+        assistance_program_hot=ranking.assistance_program_hot,
+        complaint_filed_date=analysis.complaint_filed_date,
+        lender_plaintiff=analysis.lender_plaintiff,
+        complaint_principal_amount=old_result.complaint_principal_amount,
+        complaint_unpaid_since=old_result.complaint_unpaid_since,
+        recent_complaint_hot=ranking.recent_complaint_hot,
+        assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=analysis.assistance_elapsed_date,
+        probate_case=analysis.probate_case,
+        probate_signal=analysis.probate_signal,
+        estate_of=analysis.estate_of,
+        heirs=analysis.heirs,
+        today=today,
+    )
+
+    return dataclasses.replace(
+        old_result,
+        lead_bucket=ranking.lead_bucket,
+        warm_cold_subflag=ranking.warm_cold_subflag,
+        recent_complaint_hot=ranking.recent_complaint_hot,
+        recent_complaint_warm=ranking.recent_complaint_warm,
+        assistance_program_hot=ranking.assistance_program_hot,
+        assistance_program_label=analysis.assistance_program_label,
+        assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=(
+            analysis.assistance_elapsed_date.isoformat()
+            if analysis.assistance_elapsed_date else None
+        ),
+        probate_case=analysis.probate_case,
+        probate_signal=analysis.probate_signal,
+        estate_of=analysis.estate_of,
+        heirs="; ".join(analysis.heirs),
+        complaint_filed_date=(
+            analysis.complaint_filed_date.isoformat()
+            if analysis.complaint_filed_date else None
+        ),
+        lender_plaintiff=analysis.lender_plaintiff,
+        case_summary=case_summary,
+        docket_entry_count=len(docket.entries),
+    )
+
+
 async def recheck_matched_case(
     context: BrowserContext, throttle: Throttle, old_result: CaseResult, auction_listing: dict,
 ) -> tuple[CaseResult, bool]:
@@ -79,10 +188,16 @@ async def recheck_matched_case(
     reprocess (worksheet/order-doc/continuance OCR) when the docket's
     entry count has grown since last check. Returns (result, changed) --
     `result` is `old_result` unchanged if nothing new was found.
+
+    When nothing new was filed, the already-fetched docket still goes
+    through reclassify_from_docket() so rule changes reach every stored
+    case without spending a single extra request.
     """
     docket = await fetch_docket(context, throttle, old_result.docket_no)
     if len(docket.entries) <= old_result.docket_entry_count:
-        return old_result, False
+        analysis = analyze_docket(docket)
+        refreshed = reclassify_from_docket(old_result, docket, analysis, date.today())
+        return refreshed, _meaningfully_different(old_result, refreshed)
 
     new_result, _worksheet = await process_case(
         context, throttle, old_result.town, old_result.docket_no, auction_listing,
