@@ -59,7 +59,7 @@ MEANINGFUL_FIELDS = (
     "assistance_program_label", "assistance_program_entered_date", "assistance_program_hot",
     "recent_complaint_hot", "complaint_principal_amount", "complaint_unpaid_since",
     "recent_complaint_warm", "assistance_state", "assistance_elapsed_date",
-    "probate_case", "estate_of", "heirs",
+    "probate_case", "estate_of", "heirs", "assistance_elapsed_hot",
 )
 
 
@@ -116,6 +116,7 @@ def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> C
         complaint_filed_date=analysis.complaint_filed_date,
         lender_plaintiff=analysis.lender_plaintiff,
         assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=analysis.assistance_elapsed_date,
         probate_case=analysis.probate_case,
     )
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
@@ -162,6 +163,15 @@ def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> C
         recent_complaint_warm=ranking.recent_complaint_warm,
         assistance_program_hot=ranking.assistance_program_hot,
         assistance_program_label=analysis.assistance_program_label,
+        # Persist the INPUT alongside the derived flag. Storing only the
+        # flag leaves the record internally inconsistent, so anything that
+        # later re-derives the bucket from stored fields (offline
+        # reclassification) recomputes it from a stale date and silently
+        # demotes the case.
+        assistance_program_entered_date=(
+            analysis.assistance_program_entered_date.isoformat()
+            if analysis.assistance_program_entered_date else None
+        ),
         assistance_state=analysis.assistance_state,
         assistance_elapsed_date=(
             analysis.assistance_elapsed_date.isoformat()

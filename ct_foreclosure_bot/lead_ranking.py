@@ -111,6 +111,14 @@ BANKRUPTCY_REOPEN_HOT_MAX_MONTHS = 12
 ASSISTANCE_PROGRAM_HOT_MIN_MONTHS = 1
 ASSISTANCE_PROGRAM_HOT_MAX_MONTHS = 12
 
+# A closed loan-assistance window (mediation expired/terminated, or EMAP
+# denied/expired) is itself a HOT signal, independent of any complaint --
+# the owner's rescue options are spent and the foreclosure resumes. Capped
+# at 3 months per explicit instruction: a mediation that lapsed a year ago
+# with nothing since is a stale case, not a live lead, and the older tail
+# is large (268 of 589 statewide had elapsed 1+ years ago).
+ASSISTANCE_ELAPSED_HOT_MAX_MONTHS = 3
+
 # A bank/lender-filed complaint counts as "recent" (and therefore HOT --
 # see module docstring) when filed within this many months of today AND
 # on/after the fixed floor date below. The floor is per explicit request
@@ -157,6 +165,16 @@ def is_assistance_program_hot(entered_date: date | None, today: date) -> bool:
         return False
     months = months_between(entered_date, today)
     return ASSISTANCE_PROGRAM_HOT_MIN_MONTHS <= months <= ASSISTANCE_PROGRAM_HOT_MAX_MONTHS
+
+
+def is_assistance_elapsed_hot(elapsed_date: date | None, today: date) -> bool:
+    """Assistance closed recently enough to still be actionable. Requires
+    a parsed elapse date -- "elapsed at some unknown time" is exactly the
+    stale case this window exists to exclude.
+    """
+    if elapsed_date is None or elapsed_date > today:
+        return False
+    return months_between(elapsed_date, today) <= ASSISTANCE_ELAPSED_HOT_MAX_MONTHS
 
 
 def is_recent_complaint(complaint_filed_date: date | None, lender_plaintiff: bool, today: date) -> bool:
@@ -228,6 +246,8 @@ class RankingInfo:
     recent_complaint_hot: bool = False  # recent lender complaint AND assistance clock spent/absent
     recent_complaint_warm: bool = False  # recent lender complaint BUT assistance still running
     assistance_state: str = "none"  # "none" | "open" | "elapsed" -- see case_analysis/motions
+    assistance_elapsed_date: date | None = None
+    assistance_elapsed_hot: bool = False  # assistance closed within the 3-month HOT window
     probate_case: bool = False
 
 
@@ -308,6 +328,7 @@ def classify_case(
         complaint_filed_date=analysis.complaint_filed_date,
         lender_plaintiff=analysis.lender_plaintiff,
         assistance_state=analysis.assistance_state,
+        assistance_elapsed_date=analysis.assistance_elapsed_date,
         probate_case=analysis.probate_case,
     )
     decide_bucket(ranking, analysis.bankruptcy_stay_reopened, today)
@@ -353,7 +374,18 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: d
     ranking.recent_complaint_hot = recent_complaint and ranking.assistance_state != "open"
     ranking.recent_complaint_warm = recent_complaint and ranking.assistance_state == "open"
 
-    if ranking.bankruptcy_reopen_hot or ranking.assistance_program_hot or ranking.recent_complaint_hot:
+    # A recently-closed assistance window is HOT on its own, with or
+    # without a complaint on record -- see is_assistance_elapsed_hot().
+    ranking.assistance_elapsed_hot = ranking.assistance_state == "elapsed" and is_assistance_elapsed_hot(
+        ranking.assistance_elapsed_date, today
+    )
+
+    if (
+        ranking.bankruptcy_reopen_hot
+        or ranking.assistance_program_hot
+        or ranking.recent_complaint_hot
+        or ranking.assistance_elapsed_hot
+    ):
         ranking.lead_bucket = "HOT"
     elif ranking.recent_complaint_warm:
         ranking.lead_bucket = "WARM"

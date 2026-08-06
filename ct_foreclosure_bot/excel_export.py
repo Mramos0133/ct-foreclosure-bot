@@ -46,6 +46,7 @@ COLUMNS = [
         "none": "None on docket",
     }.get(r.assistance_state, r.assistance_state or "")),
     ("Assistance Ended Date", lambda r: r.assistance_elapsed_date or ""),
+    ("HOT: Assistance Just Elapsed (Y/N)", lambda r: "Y" if r.assistance_elapsed_hot else "N"),
     ("Probate / Estate Case (Y/N)", lambda r: "Y" if r.probate_case else "N"),
     ("Probate Signal", lambda r: r.probate_signal),
     ("Estate Of (deceased owner)", lambda r: r.estate_of),

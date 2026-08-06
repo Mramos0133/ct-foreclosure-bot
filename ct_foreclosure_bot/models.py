@@ -92,6 +92,7 @@ class CaseResult:
     complaint_unpaid_since: str | None = None  # date P&I unpaid since, per the complaint (ISO if parsed, else raw matched text)
     recent_complaint_hot: bool = False  # recent lender complaint AND assistance clock spent/absent
     recent_complaint_warm: bool = False  # recent lender complaint BUT assistance still running
+    assistance_elapsed_hot: bool = False  # assistance/EMAP closed within the 3-month HOT window
     # Loan-assistance clock: "none" | "open" | "elapsed" -- drives the
     # complaint-stage HOT/WARM split, see lead_ranking.py
     assistance_state: str = "none"

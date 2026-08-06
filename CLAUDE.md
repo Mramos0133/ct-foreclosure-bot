@@ -92,7 +92,17 @@ section exists so the reasoning is not lost.
    value are both known; a case is never penalized for a figure the OCR
    failed to read.
 
-3. **Complaint-stage leads split on the loan-assistance clock.** A recent
+3. **A recently-closed assistance window is HOT on its own.** When
+   mediation expired/terminated or EMAP was denied/expired within
+   `ASSISTANCE_ELAPSED_HOT_MAX_MONTHS` (3), the case is HOT regardless of
+   whether a complaint is on record -- the owner's rescue options are
+   spent and the foreclosure resumes. Capped at 3 months because the
+   older tail is large and stale (268 of 589 statewide had elapsed 1+
+   years ago) and a lapse from last year is not a live lead.
+   `scripts/reclassify_offline.py` applies this to the whole checkpoint
+   with no network, since both inputs are persisted.
+
+4. **Complaint-stage leads split on the loan-assistance clock.** A recent
    lender complaint is no longer HOT on its own:
    - complaint + assistance **elapsed or absent** -> **HOT** (options
      spent, owner reachable and out of alternatives)
