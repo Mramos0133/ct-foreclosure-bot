@@ -23,6 +23,20 @@ four of the spec's Step 2 fields, so a shared link alone cannot fully
 populate a row -- see `price_drops` handling in scoring.py, which
 refuses to report "0 drops" when it simply does not know.
 
+THE ANONYMOUS VIEW IS A STRIPPED VIEW, NOT A DIFFERENT SHAPE. Every
+composite field comes back null while the KEY is still present:
+AllFields, SalesHistory, Rooms, ReportFields, Comments, MediaLinks,
+PublicDocuments, OpenHouses. The operator confirmed that his logged-in
+connectMLS view shows a "Marketing" section carrying original list
+price, most recent list price, and the dates each change happened --
+i.e. exactly the SalesHistory this response nulls out. Rendering the
+shared-link page headlessly and expanding everything reachable produced
+only the 124-character summary card and no extra XHR, so that data is
+not hiding behind a tab on the public page; it is behind the session.
+
+That makes the authenticated endpoints below the way to get price
+history, and `--discover-api` the way to learn their shape.
+
 THE AUTHENTICATED ENDPOINTS: probing the same host, `/api/listing/{id}`
 and `/api/listings/{id}` answer 401 rather than 404 -- they exist and
 need a session. They are the likely home of the missing fields. The
@@ -124,6 +138,16 @@ def listing_from_payload(listing: dict) -> MlsDetail:
 
 
 def _price_history(history) -> list:
+    """Map a SalesHistory array onto PriceChange rows.
+
+    THE KEY NAMES HERE ARE A GUESS. SalesHistory is null in every
+    anonymous response seen so far, so its element shape has never been
+    observed -- Date/ChangeDate/OldPrice/PreviousPrice/NewPrice/Price are
+    plausible spellings, not confirmed ones. Replace them with the real
+    names from a `--discover-api` capture. Until then this is inert:
+    nothing calls it with a non-empty history, and an unrecognised shape
+    yields NA fields rather than wrong numbers.
+    """
     from .models import PriceChange
 
     changes = []

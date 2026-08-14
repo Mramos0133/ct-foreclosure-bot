@@ -154,6 +154,15 @@ property type and Remarks -- but returns **null** for ListingAgent and
 SalesHistory, and has no DOM, list-date or expiration-date field. Four
 Step 2 fields it cannot supply.
 
+The anonymous response is a *stripped* view, not a different shape:
+AllFields, SalesHistory, Rooms, ReportFields, Comments, MediaLinks and
+OpenHouses are all present as keys and all null. The operator's
+logged-in view shows a "Marketing" section with original list price,
+most recent list price and each change date -- that is the SalesHistory
+this response nulls out. Rendering the public page headlessly and
+expanding everything reachable yields only the 124-char summary card and
+no extra XHR, so it is behind the session, not behind a tab.
+
 **The authenticated endpoints exist but are not yet mapped.**
 `/api/listing/{id}` and `/api/listings/{id}` answer **401, not 404** --
 they are real and need a session. The path, the id form (MLS number vs
