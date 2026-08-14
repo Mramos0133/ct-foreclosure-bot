@@ -132,6 +132,42 @@ auth at all; it is the fallback when Graph is unavailable, at the cost
 of being a manual step every run. The IMAP path is kept for a future
 non-Microsoft mailbox, not because it works today.
 
+### Step 2: use the JSON API, not HTML scraping
+
+connectMLS is a single-page app -- the HTML is an empty shell and every
+field arrives as JSON. So `connectmls_api.py`, not `mls.py`, is the
+right path for listing detail.
+
+**Verified 2026-08-13**, no authentication required:
+
+```
+GET https://smartmls-apiserver.connectmls.com/api/shared-link/{uuid}
+```
+
+returns `{"Listings":[{...83 fields...}]}`. Pinned in
+`tests/fixtures_shared_link.json` (real payload for MLS 24119274).
+Try it: `python -m ct_expired_bot --shared-link "<url>"`.
+
+It carries ListingId, StreetAddress, City, Zip, MlsStatus, ListPrice,
+OriginalListPrice, beds/baths, SquareFeet, Acres, LotSqft, YearBuilt,
+property type and Remarks -- but returns **null** for ListingAgent and
+SalesHistory, and has no DOM, list-date or expiration-date field. Four
+Step 2 fields it cannot supply.
+
+**The authenticated endpoints exist but are not yet mapped.**
+`/api/listing/{id}` and `/api/listings/{id}` answer **401, not 404** --
+they are real and need a session. The path, the id form (MLS number vs
+the internal `Id` GUID) and the auth header are unknown, and are
+deliberately not guessed. Capture them from a logged-in profile:
+
+```
+python -m ct_expired_bot --discover-api
+```
+
+That opens a headed browser on the saved profile, records which JSON
+endpoints a listing page calls and their field names, and redacts
+Authorization/Cookie values rather than writing them down.
+
 ### What is verified vs. what is a guess
 
 Verified live on 2026-08-04, with tests pinned to the observed values:
@@ -146,6 +182,14 @@ Verified live on 2026-08-04, with tests pinned to the observed values:
   `FIRST LAST` -- 'CARTWRIGHT ANGELA', 'MELECIO JAMIE K'. Reading them
   the other way reverses every name sent to the vendor. `names.py` takes
   an explicit `order` for this reason; do not "simplify" it away.
+- **The connectMLS shared-link API** (see above) -- real payload pinned
+  as a test fixture.
+- **"Unknown" is not "zero" for price drops.** The shared-link API has
+  no SalesHistory, so a 520k -> 480k listing would otherwise record as
+  "0 price drops" and read as a seller who never moved on price.
+  `count_price_drops` returns None when no history was supplied, and
+  scoring falls back to original-vs-final, which IS known: enough for
+  Medium, never enough to claim the 2+ that means High.
 - **The TLS 1.2 workaround** in `browser.py` is required here for the
   same proxy reason as `ct_foreclosure_bot/browser.py` -- without it,
   every gis.vgsi.com load fails ERR_CONNECTION_RESET.
@@ -157,7 +201,7 @@ Still unconfirmed, and marked as such in the module docstrings:
   "MLS#:" label, line-oriented, reading `Town, CT ZIP`. The exact HTML
   tags are still unseen -- only a screenshot was available -- so the
   parser deliberately keys on text and line structure rather than markup.
-- `mls.py` -- BOTH the detail-page URL and the field labels. SmartMLS
+- `mls.py` (the HTML-scraping path) -- BOTH the detail-page URL and the field labels. SmartMLS
   runs on **connectMLS (dynaConnections), not Matrix** (confirmed
   2026-08-13 from an alert link resolving to
   smartmls-portal.connectmls.com). There is deliberately no default URL:
@@ -181,4 +225,4 @@ Still unconfirmed, and marked as such in the module docstrings:
   reordered sheet does not shuffle them.
 - `N/A` means the source did not print it. Nothing is estimated.
 
-Tests: `python -m unittest discover -s tests -v` (53 tests, no network).
+Tests: `python -m unittest discover -s tests -v` (64 tests, no network).

@@ -99,6 +99,9 @@ class MlsDetail:
     list_date: str = NA
     expiration_date: str = NA
     price_history: list[PriceChange] = field(default_factory=list)
+    # False means the source never gave us a history -- distinct from
+    # 'a history that shows no drops'. See scoring.count_price_drops.
+    price_history_available: bool = False
     beds: str = NA
     full_baths: str = NA
     half_baths: str = NA
@@ -164,7 +167,7 @@ class Lead:
     alert: AlertListing
     mls: MlsDetail
     owner: OwnerRecord
-    price_drops: int = 0
+    price_drops: int | None = 0  # None = unknown, not zero
     total_reduction_dollars: str = NA
     total_reduction_pct: str = NA
     price_per_sqft: str = NA

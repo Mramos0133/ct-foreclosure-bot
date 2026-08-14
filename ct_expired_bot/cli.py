@@ -66,6 +66,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--login", action="store_true", help="Open a browser window to sign into SmartMLS once, then exit.")
     p.add_argument("--seed-portals", action="store_true", help="Fill the Town Portals tab for all 169 CT towns from the confirmed Vision list, then exit.")
     p.add_argument("--verify-portals", action="store_true", help="With --seed-portals, also web-discover the towns that are not on Vision (slow).")
+    p.add_argument("--discover-api", action="store_true", help="Open a headed browser on your logged-in connectMLS profile and record which JSON endpoints a listing page calls, plus their field names (auth headers redacted). Writes --api-report and prints a digest.")
+    p.add_argument("--api-report", default="connectmls-api-report.json", help="Where --discover-api writes its findings.")
+    p.add_argument("--shared-link", default=None, help="Read one listing from a connectMLS shared link (public, no login) and print what was captured, then exit.")
     p.add_argument("--mls", default=None, help="Fetch one MLS number and print what was captured, then exit. For confirming labels.")
     p.add_argument("--dump-html", default=None, help="With --mls, write the raw page HTML here.")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -132,6 +135,26 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.login:
         async with async_playwright() as playwright:
             await run_login_flow(playwright, profile_dir=config.profile_dir)
+        return 0
+
+    if args.shared_link:
+        from dataclasses import asdict
+
+        from .connectmls_api import fetch_shared_link
+
+        detail = fetch_shared_link(args.shared_link)
+        for key, value in asdict(detail).items():
+            print(f"{key:24s} = {value!r}")
+        return 0 if detail.pull_status == "ok" else 1
+
+    if args.discover_api:
+        from .api_discovery import discover, summarize
+
+        report = await discover(
+            config.profile_dir, Path(args.api_report).expanduser(),
+        )
+        print("\n" + summarize(report))
+        print(f"Full report: {report}")
         return 0
 
     if args.graph_login:

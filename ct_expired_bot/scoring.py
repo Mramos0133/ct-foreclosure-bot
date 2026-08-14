@@ -51,8 +51,18 @@ def addresses_match(a: str | None, b: str | None) -> bool | None:
     return na.startswith(nb) or nb.startswith(na)
 
 
-def count_price_drops(mls: MlsDetail) -> int:
-    """Number of history rows where the price actually decreased."""
+def count_price_drops(mls: MlsDetail) -> int | None:
+    """Decreases in the price history, or None when there is no history.
+
+    None matters. The connectMLS shared-link API returns no SalesHistory,
+    so a listing that went 520k -> 480k would otherwise be recorded as
+    "0 price drops" -- reading as a seller who has never moved on price,
+    when in fact they cut 40k. Returning None keeps "we do not know"
+    distinct from "we know it is zero", and score_lead falls back to the
+    original-vs-final comparison, which IS known.
+    """
+    if not mls.price_history_available:
+        return None
     drops = 0
     for change in mls.price_history:
         old, new = parse_money(change.old_price), parse_money(change.new_price)
@@ -127,9 +137,20 @@ def score_lead(lead: Lead, today: date | None = None) -> Lead:
         lead.absentee = "No" if match else "Yes"
 
     dom = _dom(mls)
-    if lead.absentee == "Yes" or lead.price_drops >= 2 or (dom is not None and dom >= 120):
+    drops = lead.price_drops
+    # With no history, a reduction still proves at least one drop happened
+    # -- enough for Medium, never enough to claim the 2+ that means High.
+    reduced = delta is not None and delta > 0
+    if drops is None:
+        known_two_plus = False
+        at_least_one = reduced
+    else:
+        known_two_plus = drops >= 2
+        at_least_one = drops >= 1
+
+    if lead.absentee == "Yes" or known_two_plus or (dom is not None and dom >= 120):
         lead.lead_score = "High"
-    elif lead.price_drops == 1 or (dom is not None and 60 <= dom <= 119):
+    elif at_least_one or (dom is not None and 60 <= dom <= 119):
         lead.lead_score = "Medium"
     else:
         lead.lead_score = "Low"

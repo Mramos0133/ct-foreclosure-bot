@@ -125,7 +125,7 @@ class TestNameSplitting(unittest.TestCase):
 
 class TestScoring(unittest.TestCase):
     def test_counts_only_decreases(self):
-        mls = MlsDetail(mls_no="1", price_history=[
+        mls = MlsDetail(mls_no="1", price_history_available=True, price_history=[
             PriceChange("01/01/2026", "$500,000", "$475,000"),   # drop
             PriceChange("02/01/2026", "$475,000", "$450,000"),   # drop
             PriceChange("03/01/2026", "$450,000", "$460,000"),   # increase
@@ -169,7 +169,7 @@ class TestScoring(unittest.TestCase):
         self.assertNotEqual(lead.lead_score, "High")
 
     def test_high_from_two_price_drops(self):
-        lead = make_lead(mls=MlsDetail(mls_no="1", price_history=[
+        lead = make_lead(mls=MlsDetail(mls_no="1", price_history_available=True, price_history=[
             PriceChange("01/01/2026", "$500,000", "$475,000"),
             PriceChange("02/01/2026", "$475,000", "$450,000"),
         ]))
@@ -549,3 +549,117 @@ class TestListingUrlTemplate(unittest.TestCase):
 
         with self.assertRaises(ListingUrlUnknown):
             listing_url("24139663", "https://host/listing")
+
+
+class TestConnectMlsApi(unittest.TestCase):
+    """Pinned to a real /api/shared-link response captured 2026-08-13.
+
+    The fixture is the genuine payload for MLS 24119274 (105 Camptown
+    Ave, Derby) with only the photo arrays blanked out.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import json as _json
+
+        path = Path(__file__).parent / "fixtures_shared_link.json"
+        cls.payload = _json.loads(path.read_text())
+
+    def test_maps_the_real_payload(self):
+        from ct_expired_bot.connectmls_api import listing_from_payload
+
+        detail = listing_from_payload(self.payload["Listings"][0])
+        self.assertEqual(detail.mls_no, "24119274")
+        self.assertEqual(detail.list_price_final, "480000")
+        self.assertEqual(detail.list_price_original, "520000")
+        self.assertEqual(detail.beds, "4")
+        self.assertEqual(detail.full_baths, "2")
+        self.assertEqual(detail.half_baths, "0")
+        self.assertEqual(detail.sqft_above_grade, "1496")
+        self.assertEqual(detail.year_built, "1884")
+        self.assertEqual(detail.town, "Derby")
+        self.assertEqual(detail.zip_code, "06418")
+        self.assertIn("Multi-Family", detail.property_type)
+        self.assertIn("SELLER CREDIT", detail.public_remarks)
+
+    def test_fields_the_api_omits_stay_na(self):
+        from ct_expired_bot.connectmls_api import listing_from_payload
+
+        detail = listing_from_payload(self.payload["Listings"][0])
+        for missing in (
+            detail.days_on_market, detail.cumulative_dom,
+            detail.list_date, detail.expiration_date,
+            detail.listing_agent, detail.brokerage,
+        ):
+            self.assertEqual(missing, NA)
+        self.assertFalse(detail.price_history_available)
+
+    def test_remarks_truncated_to_200(self):
+        from ct_expired_bot.connectmls_api import listing_from_payload
+
+        detail = listing_from_payload(self.payload["Listings"][0])
+        self.assertLessEqual(len(detail.public_remarks), 200)
+
+    def test_status_read_from_payload(self):
+        from ct_expired_bot.connectmls_api import listing_status
+
+        self.assertEqual(listing_status(self.payload["Listings"][0]), "Expired")
+
+    def test_uuid_extracted_from_shared_link_url(self):
+        from ct_expired_bot.connectmls_api import shared_link_uuid
+
+        url = ("https://smartmls-portal.connectmls.com/shared-link/"
+               "derby-multi-family-for-sale-for-sale-105-camptown-ave/"
+               "c8df80ed-23a0-4a45-87ff-03e58ec37b1b")
+        self.assertEqual(shared_link_uuid(url), "c8df80ed-23a0-4a45-87ff-03e58ec37b1b")
+        self.assertIsNone(shared_link_uuid("https://example.com/nope"))
+
+
+class TestUnknownVsZeroPriceDrops(unittest.TestCase):
+    """A 520k -> 480k listing with no SalesHistory must not read as
+    'never dropped the price'. That is the shape every shared-link
+    listing arrives in.
+    """
+
+    def _derby_lead(self):
+        return make_lead(mls=MlsDetail(
+            mls_no="24119274",
+            list_price_original="520000", list_price_final="480000",
+            sqft_above_grade="1496",
+        ))
+
+    def test_drops_unknown_not_zero(self):
+        lead = self._derby_lead()
+        score_lead(lead, today=date(2026, 8, 14))
+        self.assertIsNone(lead.price_drops)
+
+    def test_reduction_still_computed_exactly(self):
+        lead = self._derby_lead()
+        score_lead(lead, today=date(2026, 8, 14))
+        self.assertEqual(lead.total_reduction_dollars, "40000")
+        self.assertEqual(lead.total_reduction_pct, "7.7%")
+
+    def test_unknown_drops_with_reduction_scores_medium(self):
+        lead = self._derby_lead()
+        score_lead(lead, today=date(2026, 8, 14))
+        self.assertEqual(lead.lead_score, "Medium")
+
+    def test_unknown_drops_without_reduction_scores_low(self):
+        lead = make_lead(mls=MlsDetail(
+            mls_no="1", list_price_original="500000", list_price_final="500000",
+        ))
+        score_lead(lead, today=date(2026, 8, 14))
+        self.assertEqual(lead.lead_score, "Low")
+
+    def test_known_zero_drops_is_still_zero(self):
+        lead = make_lead(mls=MlsDetail(mls_no="1", price_history_available=True))
+        score_lead(lead, today=date(2026, 8, 14))
+        self.assertEqual(lead.price_drops, 0)
+
+    def test_workbook_renders_unknown_drops_as_na(self):
+        from ct_expired_bot.workbook import BOT_COLUMNS
+
+        getter = dict(BOT_COLUMNS)["Price Drops"]
+        lead = self._derby_lead()
+        score_lead(lead, today=date(2026, 8, 14))
+        self.assertEqual(getter(lead), NA)

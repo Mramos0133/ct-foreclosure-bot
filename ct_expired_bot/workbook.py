@@ -67,7 +67,7 @@ BOT_COLUMNS: list[tuple[str, object]] = [
     ("Assessor Beds", lambda l: l.owner.assessor_beds),
     ("Assessor Baths", lambda l: l.owner.assessor_baths),
     ("Assessor Card URL", lambda l: l.owner.portal_url),
-    ("Price Drops", lambda l: l.price_drops),
+    ("Price Drops", lambda l: NA if l.price_drops is None else l.price_drops),
     ("Total Price Reduction $", lambda l: l.total_reduction_dollars),
     ("Total Price Reduction %", lambda l: l.total_reduction_pct),
     ("Price Per Sqft", lambda l: l.price_per_sqft),
