@@ -416,3 +416,136 @@ class TestGraphMail(unittest.TestCase):
 
         url = _messages_url(None, "o'brien@example.com")
         self.assertIn("o%27%27brien", url)
+
+
+# Reconstructed from a screenshot of a real "Updated Matches for Matt
+# Expired" alert (2026-08-13). The TEXT and field order are what was
+# observed; the exact tags are not, so the parser is anchored on the
+# "MLS#:" label and on line structure rather than on markup.
+REAL_ALERT_HTML = """
+<div><p>Hi Matt,</p>
+<p>I have found 1 property that matches your search criteria.</p>
+<p>This listing is either new to the market or an existing listing that
+now matches your search criteria.</p>
+<p>Sincerely,<br/>Matthew Ramos</p>
+<h3>See below for a summary</h3>
+<table><tr><td>
+  <span>EXPIRED</span> <span>Expired</span>
+  <div>$320,000</div>
+  <a href="https://smartmls-portal.connectmls.com/x">701 Bucks Hill Road</a>
+  <div>Waterbury, CT 06704</div>
+  <div>MLS#: 24139663</div>
+  <div>3 Beds | 2 Baths | 1,116 SqFt | Built 1993</div>
+  <a href="#">View Details</a>
+</td></tr></table>
+<a href="#">View All Listings</a></div>
+"""
+
+
+class TestRealAlertLayout(unittest.TestCase):
+    def test_parses_the_observed_alert(self):
+        from ct_expired_bot.alerts import parse_alert_html
+
+        listings = parse_alert_html(REAL_ALERT_HTML, source="test", received_at="2026-08-13T04:16:00Z")
+        self.assertEqual(len(listings), 1)
+        listing = listings[0]
+        self.assertEqual(listing.mls_no, "24139663")
+        self.assertEqual(listing.street_address, "701 Bucks Hill Road")
+        self.assertEqual(listing.town, "Waterbury")
+        self.assertEqual(listing.zip_code, "06704")
+        self.assertEqual(listing.status, "expired")
+
+    def test_sqft_is_not_mistaken_for_an_mls_number(self):
+        """'1,116 SqFt' -> 1116 would match a bare \\d{4,} pattern."""
+        from ct_expired_bot.alerts import parse_alert_html
+
+        listings = parse_alert_html(REAL_ALERT_HTML)
+        self.assertEqual([l.mls_no for l in listings], ["24139663"])
+
+    def test_price_line_is_not_mistaken_for_the_address(self):
+        from ct_expired_bot.alerts import parse_alert_html
+
+        listing = parse_alert_html(REAL_ALERT_HTML)[0]
+        self.assertNotIn("320", listing.street_address)
+        self.assertNotIn("$", listing.street_address)
+
+    def test_multiple_listings_in_one_alert(self):
+        from ct_expired_bot.alerts import parse_alert_html
+
+        second = REAL_ALERT_HTML.replace("</table>", """
+        <tr><td><span>Withdrawn</span><div>$450,000</div>
+        <a>12 Maple Street</a><div>Naugatuck, CT 06770</div>
+        <div>MLS#: 24139999</div>
+        <div>4 Beds | 3 Baths | 2,200 SqFt | Built 1960</div></td></tr></table>""")
+        listings = parse_alert_html(second)
+        self.assertEqual(len(listings), 2)
+        self.assertEqual([l.mls_no for l in listings], ["24139663", "24139999"])
+        self.assertEqual(listings[1].town, "Naugatuck")
+        self.assertEqual(listings[1].street_address, "12 Maple Street")
+        self.assertEqual(listings[1].status, "withdrawn")
+
+    def test_active_listing_is_ignored(self):
+        from ct_expired_bot.alerts import parse_alert_html
+
+        active = REAL_ALERT_HTML.replace("<span>EXPIRED</span> <span>Expired</span>", "<span>Active</span>")
+        self.assertEqual(parse_alert_html(active), [])
+
+    def test_dedupe_across_repeated_alerts(self):
+        from ct_expired_bot.alerts import dedupe, parse_alert_html
+
+        twice = parse_alert_html(REAL_ALERT_HTML) + parse_alert_html(REAL_ALERT_HTML)
+        self.assertEqual(len(dedupe(twice)), 1)
+
+
+class TestGraphFolderScoping(unittest.TestCase):
+    def test_folder_scopes_the_message_query(self):
+        from ct_expired_bot.graph_mail import _messages_url
+
+        scoped = _messages_url(None, None, "AAMkFOLDER")
+        self.assertIn("/me/mailFolders/AAMkFOLDER/messages", scoped)
+        self.assertNotIn("/me/messages", _messages_url(None, None, "AAMkFOLDER"))
+
+    def test_no_folder_reads_whole_mailbox(self):
+        from ct_expired_bot.graph_mail import _messages_url
+
+        self.assertIn("/me/messages", _messages_url(None, None, None))
+
+    def test_default_subject_filter_does_not_drop_real_alerts(self):
+        """The observed subject is 'Updated Matches for Matt Expired -
+        400K less' and the sender is the agent, not SmartMLS. A default
+        subject filter of 'SmartMLS' matched zero real messages.
+        """
+        from ct_expired_bot.graph_mail import message_to_listings
+
+        message = {
+            "id": "x",
+            "subject": "Updated Matches for Matt Expired - 400K less",
+            "receivedDateTime": "2026-08-13T04:16:00Z",
+            "from": {"emailAddress": {"address": "matt.ramos@newerainvesting.com"}},
+            "body": {"content": REAL_ALERT_HTML},
+        }
+        self.assertEqual(len(message_to_listings(message)), 1)
+        self.assertEqual(message_to_listings(message, subject_filter="SmartMLS"), [])
+        self.assertEqual(len(message_to_listings(message, subject_filter="Updated Matches")), 1)
+
+
+class TestListingUrlTemplate(unittest.TestCase):
+    def test_template_substitutes_mls_number(self):
+        from ct_expired_bot.mls import listing_url
+
+        self.assertEqual(
+            listing_url("24139663", "https://host/listing?mls={mls_no}"),
+            "https://host/listing?mls=24139663",
+        )
+
+    def test_missing_template_raises_rather_than_guessing(self):
+        from ct_expired_bot.mls import ListingUrlUnknown, listing_url
+
+        with self.assertRaises(ListingUrlUnknown):
+            listing_url("24139663", "")
+
+    def test_template_without_placeholder_raises(self):
+        from ct_expired_bot.mls import ListingUrlUnknown, listing_url
+
+        with self.assertRaises(ListingUrlUnknown):
+            listing_url("24139663", "https://host/listing")

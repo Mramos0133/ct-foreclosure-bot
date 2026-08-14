@@ -1,17 +1,36 @@
-"""Step 2: capture listing detail from SmartMLS (Matrix).
+"""Step 2: capture listing detail from SmartMLS (connectMLS).
 
->>> UNVERIFIED AGAINST THE LIVE MATRIX DOM <<<
-Matrix detail pages are label/value pairs whose exact markup varies by
-MLS and by the display template the board has configured, and this was
-written without an authenticated session to inspect. So extraction is
-deliberately label-driven rather than selector-driven: it reads the
+>>> THE DETAIL-PAGE URL IS NOT KNOWN, AND IS NOT GUESSED <<<
+SmartMLS runs on connectMLS (dynaConnections), not Matrix -- confirmed
+2026-08-13 from an alert email's link, which resolves to
+smartmls-portal.connectmls.com and redirects to a connectMLS login. An
+earlier version of this module aimed at
+`matrix.smartmls.com/Matrix/Public/Portal.aspx?ID=<n>`, which is the
+wrong system entirely.
+
+Rather than swap one guessed URL for another, there is now no default:
+`--listing-url-template` must be supplied, e.g.
+
+    --listing-url-template "https://<host>/listing/detail?mls={mls_no}"
+
+Without it every row is marked MLS_PULL_FAILED with a message saying so,
+the run still completes, and the alert and assessor steps still produce
+usable rows. That is deliberate -- a plausible-looking wrong URL would
+404 every listing and read like an outage instead of a missing setting.
+
+To find the template: open any listing while logged into connectMLS and
+copy the address bar, replacing the MLS number with `{mls_no}`.
+
+>>> THE FIELD LABELS ARE ALSO UNCONFIRMED <<<
+Extraction is label-driven rather than selector-driven: it reads the
 rendered text and pairs each known label with the value that follows it.
-That survives markup changes and template differences far better than a
-CSS path would, but the *labels themselves* still need one pass of
-confirmation against your board's display.
+That survives markup changes far better than a CSS path would, but the
+labels below were written for a Matrix-style layout and have not been
+checked against connectMLS's display.
 
 Confirm them with:
-    python -m ct_expired_bot --mls 24012345 --dump-html out.html
+    python -m ct_expired_bot --mls 24139663 \
+        --listing-url-template "..." --dump-html out.html
 
 then adjust `LABELS` below, or override without editing code by passing
 `--label-overrides labels.json` ({"beds": ["Bedrooms", "Total Beds"]}).
@@ -29,7 +48,6 @@ from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page
 
-from .browser import MATRIX_BASE_URL
 from .models import NA, MLS_PULL_FAILED, MlsDetail, PriceChange
 
 log = logging.getLogger(__name__)
@@ -135,9 +153,24 @@ def extract_price_history(page_text: str) -> list[PriceChange]:
     return changes
 
 
-def listing_url(mls_no: str) -> str:
-    """Matrix's permalink-by-MLS-number form."""
-    return f"{MATRIX_BASE_URL}/Matrix/Public/Portal.aspx?ID={mls_no}"
+class ListingUrlUnknown(RuntimeError):
+    """No --listing-url-template was supplied. See the module docstring."""
+
+
+def listing_url(mls_no: str, template: str | None) -> str:
+    """Build the detail URL from the operator-supplied template."""
+    if not template:
+        raise ListingUrlUnknown(
+            "No listing URL template configured. Open a listing while logged "
+            "into connectMLS, copy the address, and pass it with the MLS "
+            "number replaced by {mls_no}: "
+            '--listing-url-template "https://<host>/...?mls={mls_no}"'
+        )
+    if "{mls_no}" not in template:
+        raise ListingUrlUnknown(
+            f"--listing-url-template must contain the {{mls_no}} placeholder; got {template!r}"
+        )
+    return template.replace("{mls_no}", mls_no)
 
 
 async def fetch_detail(
@@ -146,14 +179,21 @@ async def fetch_detail(
     labels: dict[str, list[str]] | None = None,
     timeout_ms: int = 45000,
     dump_html_to: str | Path | None = None,
+    url_template: str | None = None,
 ) -> MlsDetail:
     """Open one listing and capture it. Never raises for a bad page."""
     labels = labels or dict(LABELS)
     detail = MlsDetail(mls_no=mls_no)
+    try:
+        target = listing_url(mls_no, url_template)
+    except ListingUrlUnknown as exc:
+        detail.pull_status = MLS_PULL_FAILED
+        detail.pull_error = str(exc)[:300]
+        return detail
     page: Page | None = None
     try:
         page = await context.new_page()
-        await page.goto(listing_url(mls_no), wait_until="domcontentloaded", timeout=timeout_ms)
+        await page.goto(target, wait_until="domcontentloaded", timeout=timeout_ms)
         await page.wait_for_timeout(1500)  # Matrix renders detail panels client-side
         html = await page.content()
         if dump_html_to:
@@ -190,6 +230,7 @@ async def fetch_many(
     mls_numbers: list[str],
     labels: dict[str, list[str]] | None = None,
     delay_seconds: float = 2.0,
+    url_template: str | None = None,
 ) -> dict[str, MlsDetail]:
     """Sequential by design -- one authenticated session, no parallel load
     on the MLS, same posture as ct_foreclosure_bot's Throttle.
@@ -198,7 +239,9 @@ async def fetch_many(
     for index, mls_no in enumerate(mls_numbers):
         if index:
             await asyncio.sleep(delay_seconds)
-        results[mls_no] = await fetch_detail(context, mls_no, labels=labels)
+        results[mls_no] = await fetch_detail(
+            context, mls_no, labels=labels, url_template=url_template
+        )
         log.info(
             "[%d/%d] MLS %s: %s",
             index + 1, len(mls_numbers), mls_no, results[mls_no].pull_status,

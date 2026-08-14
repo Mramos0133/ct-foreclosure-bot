@@ -53,6 +53,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", default=".", help="Where skiptrace-YYYY-MM-DD.csv and review-YYYY-MM-DD.csv are written.")
     p.add_argument("--csv-headers", default=None, help=f"Your vendor's exact headers, comma-separated, in this order: {', '.join(CANONICAL_FIELDS)}")
     p.add_argument("--csv-header-map", default=None, help='JSON {"Your Header": "canonical_field"} for a vendor whose column set differs in shape.')
+    p.add_argument("--listing-url-template", default=os.environ.get("CT_EXPIRED_LISTING_URL", ""), help="connectMLS detail-page URL with {mls_no} where the MLS number goes, e.g. 'https://host/listing?mls={mls_no}'. Required for Step 2; without it every row is marked MLS_PULL_FAILED. Defaults to CT_EXPIRED_LISTING_URL.")
+    p.add_argument("--graph-folder", default="", help="Mail folder to read instead of the whole mailbox, e.g. 'CT-Expired Listings'. Searched recursively by display name.")
+    p.add_argument("--subject-filter", default="", help="Only parse messages whose subject contains this (e.g. 'Updated Matches'). Empty means no subject filtering -- correct when --graph-folder already isolates the alerts.")
     p.add_argument("--label-overrides", default=None, help='JSON {"beds": ["Bedrooms"]} overriding the MLS detail labels in mls.py.')
     p.add_argument("--profile-dir", default=None, help="Chrome profile directory holding the SmartMLS session (default: ~/.ct_expired_bot/chrome-profile).")
     p.add_argument("--limit", type=int, default=None, help="Process at most this many new listings (useful for a first test batch).")
@@ -83,6 +86,9 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
         profile_dir=Path(args.profile_dir).expanduser() if args.profile_dir else None,
         headless=not args.headed,
         label_overrides=Path(args.label_overrides).expanduser() if args.label_overrides else None,
+        listing_url_template=args.listing_url_template,
+        graph_folder=args.graph_folder,
+        subject_filter=args.subject_filter,
         csv_headers=args.csv_headers,
         csv_header_map=Path(args.csv_header_map).expanduser() if args.csv_header_map else None,
         output_dir=Path(args.output_dir).expanduser(),
@@ -105,7 +111,8 @@ async def _single_mls(args: argparse.Namespace, config: RunConfig) -> int:
         )
         try:
             detail = await fetch_detail(
-                context, args.mls, labels=labels, dump_html_to=args.dump_html
+                context, args.mls, labels=labels, dump_html_to=args.dump_html,
+                url_template=config.listing_url_template,
             )
         finally:
             await context.close()

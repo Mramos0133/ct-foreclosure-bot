@@ -114,7 +114,8 @@ python -m ct_expired_bot --seed-portals --master "CT-Expired-Master.xlsx"
 python -m ct_expired_bot \
   --master "~/Documents/Expired Leads/CT-Expired-Master.xlsx" \
   --graph-client-id <app id> --graph-tenant <tenant id> \
-  --csv-headers "<vendor's exact headers, 10 of them>"
+  --graph-folder "CT-Expired Listings" \
+  --listing-url-template "https://<connectmls host>/...?mls={mls_no}"
 ```
 
 ### Reading the alert emails
@@ -151,12 +152,20 @@ Verified live on 2026-08-04, with tests pinned to the observed values:
 
 Still unconfirmed, and marked as such in the module docstrings:
 
-- `alerts.py` -- the SmartMLS alert email layout. Needs one pass against
-  a real alert; everything downstream is source-agnostic, so only this
-  file should need to change.
-- `mls.py` -- the Matrix detail-page labels. Confirm with
-  `--mls <number> --dump-html out.html`, then fix `LABELS` or pass
-  `--label-overrides labels.json`.
+- `alerts.py` -- partially confirmed. The parser is now pinned to a real
+  alert's observed text (see `TestRealAlertLayout`): anchored on the
+  "MLS#:" label, line-oriented, reading `Town, CT ZIP`. The exact HTML
+  tags are still unseen -- only a screenshot was available -- so the
+  parser deliberately keys on text and line structure rather than markup.
+- `mls.py` -- BOTH the detail-page URL and the field labels. SmartMLS
+  runs on **connectMLS (dynaConnections), not Matrix** (confirmed
+  2026-08-13 from an alert link resolving to
+  smartmls-portal.connectmls.com). There is deliberately no default URL:
+  `--listing-url-template` is required, and without it every row is
+  marked MLS_PULL_FAILED rather than silently 404ing against a guess.
+  Get the template by opening a listing in connectMLS and copying the
+  address bar with the MLS number replaced by `{mls_no}`. Then confirm
+  labels with `--mls <number> --dump-html out.html`.
 - Only Vision is implemented for Step 3. Towns on QDS / Northeast /
   Tyler / custom sites return `PORTAL_UNAVAILABLE` and land in the review
   file rather than getting a guessed-at scrape.
@@ -172,4 +181,4 @@ Still unconfirmed, and marked as such in the module docstrings:
   reordered sheet does not shuffle them.
 - `N/A` means the source did not print it. Nothing is estimated.
 
-Tests: `python -m unittest discover -s tests -v` (41 tests, no network).
+Tests: `python -m unittest discover -s tests -v` (53 tests, no network).

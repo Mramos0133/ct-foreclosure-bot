@@ -1,7 +1,7 @@
 """Playwright setup that reuses the operator's real SmartMLS login.
 
 This is the part of the bot that cannot run in a cloud container, and the
-reason is worth stating plainly: SmartMLS (Matrix) is behind an
+reason is worth stating plainly: SmartMLS (connectMLS) is behind an
 authenticated session, the spec forbids storing credentials, and a
 session cookie lives in a browser profile on a particular machine. So
 this module never logs in. It attaches to a Chrome/Chromium *profile
@@ -32,7 +32,12 @@ from pathlib import Path
 
 from playwright.async_api import BrowserContext
 
-MATRIX_BASE_URL = "https://matrix.smartmls.com"
+# SmartMLS runs on connectMLS (dynaConnections), not Matrix. Confirmed
+# 2026-08-13 from an alert email's "View All Listings" link, which points
+# at smartmls-portal.connectmls.com and redirects to a connectMLS login;
+# matrix.smartmls.com is not the system this account uses. The agent-side
+# host is set with --mls-base-url if it differs from the portal host.
+CONNECTMLS_BASE_URL = "https://smartmls-portal.connectmls.com"
 DEFAULT_PROFILE_DIR = Path.home() / ".ct_expired_bot" / "chrome-profile"
 
 # Kept for parity with ct_foreclosure_bot.browser: this tool does not
@@ -99,14 +104,15 @@ async def launch_session_context(
 async def is_logged_in(context: BrowserContext, timeout_ms: int = 20000) -> bool:
     """Best-effort check that the profile's SmartMLS session is still live.
 
-    Matrix bounces an unauthenticated request to a login URL, so a landing
-    URL containing "login" is the signal. This is intentionally loose --
+    connectMLS bounces an unauthenticated request to /login, so a landing
+    URL containing "login" is the signal (confirmed 2026-08-13). This is
+    intentionally loose --
     it is a pre-flight warning, not a gate, and a false negative here
     costs one printed warning rather than a failed run.
     """
     page = await context.new_page()
     try:
-        await page.goto(MATRIX_BASE_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        await page.goto(CONNECTMLS_BASE_URL, wait_until="domcontentloaded", timeout=timeout_ms)
         landed = (page.url or "").lower()
         return "login" not in landed and "signin" not in landed
     except Exception:
@@ -123,7 +129,7 @@ async def run_login_flow(playwright, profile_dir: str | os.PathLike | None = Non
     """
     context = await launch_session_context(playwright, profile_dir=profile_dir, headless=False)
     page = await context.new_page()
-    await page.goto(MATRIX_BASE_URL, wait_until="domcontentloaded")
+    await page.goto(CONNECTMLS_BASE_URL, wait_until="domcontentloaded")
     print(
         "Sign into SmartMLS in the browser window, then close it.\n"
         f"The session will persist in {profile_dir or DEFAULT_PROFILE_DIR}."

@@ -34,18 +34,27 @@ from .models import EXPIRED_STATUSES, AlertListing
 
 log = logging.getLogger(__name__)
 
-# SmartMLS numbers render as a run of 6-10 digits, sometimes with a
-# leading letter prefix. Deliberately loose; `listings_from_rows` dedups.
+# Anchored on the "MLS#:" label the alert actually prints, rather than on
+# a bare run of digits. The label is what makes this reliable: an alert
+# body is full of other numbers (price, sqft, year built, phone numbers),
+# and a bare \d{6,10} would happily match "1,116 SqFt" once the comma is
+# stripped. Observed format: "MLS#: 24139663".
+MLS_ANCHOR_RE = re.compile(r"MLS\s*#?\s*:?\s*([A-Z]{0,2}\d{6,10})\b", re.IGNORECASE)
+# Fallback for a layout that omits the label entirely.
 MLS_NO_RE = re.compile(r"\b([A-Z]{0,2}\d{6,10})\b")
 _STATUS_RE = re.compile(
     r"\b(expired|withdrawn|cancell?ed|temporarily off market|temp off market)\b",
     re.IGNORECASE,
 )
-# "123 Main St" / "45 North Rd Unit 2B" -- number then words. Used only to
-# pick the most address-like text in a block, never to invent one.
+# "701 Bucks Hill Road" -- house number then street words, on ONE line.
+# Matching across newlines is what breaks this: the price sits on the
+# line above the address, so a \s+ here happily produces
+# "000 701 Bucks Hill Road" out of "$320,000\n701 Bucks Hill Road".
 _ADDRESS_RE = re.compile(
-    r"\b\d+[A-Za-z]?\s+[A-Za-z0-9.'\-]+(?:\s+[A-Za-z0-9.'\-]+){0,5}\b"
+    r"^\d+[A-Za-z]?[ \t]+[A-Za-z0-9.'\-]+(?:[ \t]+[A-Za-z0-9.'\-]+){0,5}$"
 )
+# "Waterbury, CT 06704" -- town, state, ZIP on one line.
+_TOWN_STATE_ZIP_RE = re.compile(r"([A-Za-z][A-Za-z .'\-]+),\s*CT\s+(0[6-9]\d{3})", re.IGNORECASE)
 _ZIP_RE = re.compile(r"\b(0[6-9]\d{3})\b")  # CT ZIPs are 06xxx-069xx
 
 
@@ -58,54 +67,91 @@ def _normalize_status(raw: str) -> str:
     return lowered
 
 
-def _block_to_listing(text: str, source: str, received_at: str) -> AlertListing | None:
+def _chunk_to_listing(text: str, mls_no: str, source: str, received_at: str) -> AlertListing | None:
     status_match = _STATUS_RE.search(text)
-    mls_match = MLS_NO_RE.search(text)
-    if not status_match or not mls_match:
+    if not status_match:
         return None
     status = _normalize_status(status_match.group(1))
     if status not in EXPIRED_STATUSES:
         return None
 
-    # Take the address candidate that is not the MLS number itself.
-    address = ""
-    for candidate in _ADDRESS_RE.findall(text):
-        if mls_match.group(1) in candidate:
-            continue
-        address = candidate.strip()
-        break
+    town, zip_code = "", ""
+    tsz = _TOWN_STATE_ZIP_RE.search(text)
+    if tsz:
+        town, zip_code = tsz.group(1).strip(), tsz.group(2)
+    else:
+        zip_match = _ZIP_RE.search(text)
+        zip_code = zip_match.group(1) if zip_match else ""
 
-    zip_match = _ZIP_RE.search(text)
+    # Line-oriented, because the alert prints each field on its own line
+    # and that is far more reliable than scanning a flattened blob: the
+    # street address is the first standalone line that looks like one and
+    # is not the MLS line, the price, or the "Town, CT ZIP" line.
+    address = ""
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line or "$" in line or mls_no in line:
+            continue
+        if _TOWN_STATE_ZIP_RE.search(line):
+            continue
+        if _ADDRESS_RE.match(line):
+            address = line
+            break
+
     return AlertListing(
-        mls_no=mls_match.group(1),
+        mls_no=mls_no,
         street_address=address,
-        zip_code=zip_match.group(1) if zip_match else "",
+        town=town,
+        zip_code=zip_code,
         status=status,
         received_at=received_at,
         source_email=source,
     )
 
 
+def _split_on_mls_anchors(text: str) -> list[tuple[str, str]]:
+    """Slice a body into one (mls_no, chunk) per listing.
+
+    Splitting on the MLS# anchors rather than on DOM elements is what
+    makes this robust to the markup: the same code handles a table-based
+    card layout and a div-based one, and an alert carrying three
+    listings yields three chunks either way. Each chunk runs from a
+    little before its own anchor to just before the next one, so the
+    status badge -- which prints above the MLS line -- stays with the
+    listing it belongs to.
+    """
+    anchors = list(MLS_ANCHOR_RE.finditer(text))
+    if not anchors:
+        return []
+    chunks: list[tuple[str, str]] = []
+    for index, match in enumerate(anchors):
+        start = anchors[index - 1].end() if index else 0
+        end = anchors[index + 1].start() if index + 1 < len(anchors) else len(text)
+        chunks.append((match.group(1), text[start:end]))
+    return chunks
+
+
 def parse_alert_html(html: str, source: str = "", received_at: str = "") -> list[AlertListing]:
     """Extract every expired-ish row from one alert message body."""
     soup = BeautifulSoup(html or "", "html.parser")
+    text = re.sub(r"[ \t]+", " ", soup.get_text("\n", strip=True))
     listings: list[AlertListing] = []
 
-    # Alerts are table-based; each listing is usually one <tr>. Falling
-    # back to whole-document text would smear several listings together,
-    # so blocks are tried narrowest-first.
-    blocks = soup.find_all("tr") or soup.find_all(["div", "p"])
-    for block in blocks:
-        text = re.sub(r"\s+", " ", block.get_text(" ", strip=True))
-        if not text:
-            continue
-        listing = _block_to_listing(text, source, received_at)
+    for mls_no, chunk in _split_on_mls_anchors(text):
+        listing = _chunk_to_listing(chunk, mls_no, source, received_at)
         if listing:
             listings.append(listing)
+    if listings:
+        return listings
 
-    if not listings:
-        whole = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
-        listing = _block_to_listing(whole, source, received_at)
+    # No "MLS#" label anywhere: fall back to per-DOM-block scanning with a
+    # bare number match, which is looser but better than returning nothing.
+    for block in soup.find_all("tr") or soup.find_all(["div", "p"]):
+        block_text = re.sub(r"\s+", " ", block.get_text(" ", strip=True))
+        match = MLS_NO_RE.search(block_text)
+        if not block_text or not match:
+            continue
+        listing = _chunk_to_listing(block_text, match.group(1), source, received_at)
         if listing:
             listings.append(listing)
     return listings

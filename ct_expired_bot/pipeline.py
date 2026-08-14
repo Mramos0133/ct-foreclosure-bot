@@ -50,6 +50,9 @@ class RunConfig:
     profile_dir: Path | None = None
     headless: bool = True
     label_overrides: Path | None = None
+    listing_url_template: str = ""
+    graph_folder: str = ""
+    subject_filter: str = ""
     csv_headers: str | None = None
     csv_header_map: Path | None = None
     output_dir: Path = Path(".")
@@ -106,6 +109,8 @@ def collect_alerts(config: RunConfig, since: datetime) -> list[AlertListing]:
             config.graph_tenant,
             since=since,
             sender_filter=config.sender_filter,
+            subject_filter=config.subject_filter,
+            folder=config.graph_folder,
             cache_path=config.graph_token_cache,
         )
     if config.imap_host and config.imap_user and config.imap_password:
@@ -183,7 +188,10 @@ async def run(config: RunConfig, today: date | None = None) -> RunReport:
             for index, listing in enumerate(new_listings, start=1):
                 log.info("[%d/%d] MLS %s %s", index, len(new_listings), listing.mls_no, listing.street_address)
 
-                detail = await fetch_detail(context, listing.mls_no, labels=labels)
+                detail = await fetch_detail(
+                    context, listing.mls_no, labels=labels,
+                    url_template=config.listing_url_template,
+                )
                 if detail.pull_status == MLS_PULL_FAILED:
                     report.mls_failed += 1
 

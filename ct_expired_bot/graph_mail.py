@@ -161,7 +161,35 @@ def _graph_get(url: str, token: str) -> dict:
         raise GraphAuthError(f"Graph request failed ({exc.code}): {body}") from exc
 
 
-def _messages_url(since: datetime | None, sender_filter: str | None) -> str:
+def find_folder_id(token: str, display_name: str) -> str | None:
+    """Resolve a mail folder by display name, searching nested folders.
+
+    Nested search matters: the alert folder observed in this mailbox
+    ("CT-Expired Listings") is a child of Inbox, not a top-level folder,
+    so a flat /me/mailFolders lookup would miss it.
+    """
+    if not display_name:
+        return None
+    queue = [f"{GRAPH_ROOT}/me/mailFolders?$top=100&$select=id,displayName"]
+    seen = 0
+    while queue and seen < 200:
+        payload = _graph_get(queue.pop(0), token)
+        for folder in payload.get("value", []):
+            seen += 1
+            if (folder.get("displayName") or "").strip().lower() == display_name.strip().lower():
+                return folder.get("id")
+            queue.append(
+                f"{GRAPH_ROOT}/me/mailFolders/{folder['id']}/childFolders"
+                "?$top=100&$select=id,displayName"
+            )
+        if payload.get("@odata.nextLink"):
+            queue.append(payload["@odata.nextLink"])
+    return None
+
+
+def _messages_url(
+    since: datetime | None, sender_filter: str | None, folder_id: str | None = None
+) -> str:
     clauses = []
     if since is not None:
         stamp = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -177,7 +205,11 @@ def _messages_url(since: datetime | None, sender_filter: str | None) -> str:
     }
     if clauses:
         params["$filter"] = " and ".join(clauses)
-    return f"{GRAPH_ROOT}/me/messages?" + urllib.parse.urlencode(params)
+    base = (
+        f"{GRAPH_ROOT}/me/mailFolders/{folder_id}/messages"
+        if folder_id else f"{GRAPH_ROOT}/me/messages"
+    )
+    return base + "?" + urllib.parse.urlencode(params)
 
 
 def message_to_listings(message: dict, subject_filter: str = "") -> list[AlertListing]:
@@ -206,12 +238,27 @@ def load_from_graph(
     tenant: str,
     since: datetime | None = None,
     sender_filter: str | None = None,
-    subject_filter: str = "SmartMLS",
+    subject_filter: str = "",
+    folder: str = "",
     cache_path: Path | None = None,
 ) -> list[AlertListing]:
-    """Fetch and parse alert messages from an M365 mailbox."""
+    """Fetch and parse alert messages from an M365 mailbox.
+
+    `subject_filter` defaults to empty on purpose. The alerts in this
+    mailbox arrive under the agent's own name with subjects like
+    "Updated Matches for Matt Expired - 400K less" -- nothing in the
+    sender or subject says "SmartMLS", so the old default of "SmartMLS"
+    matched zero messages. Scope the run with `folder` instead, and use
+    `subject_filter` only as a narrowing extra.
+    """
     token = acquire_token(client_id, tenant, cache_path=cache_path)
-    url = _messages_url(since, sender_filter)
+    folder_id = find_folder_id(token, folder) if folder else None
+    if folder and not folder_id:
+        raise GraphAuthError(
+            f"Mail folder {folder!r} not found. Check the name in Outlook "
+            "(it is matched case-insensitively, including nested folders)."
+        )
+    url = _messages_url(since, sender_filter, folder_id)
 
     collected: list[AlertListing] = []
     for _ in range(MAX_PAGES):
