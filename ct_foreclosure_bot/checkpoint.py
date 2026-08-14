@@ -48,6 +48,16 @@ CREATE TABLE IF NOT EXISTS case_results (
     saved_at     TEXT NOT NULL
 );
 
+-- Which already-matched cases have been rechecked by the CURRENT update
+-- pass. Phase 2 walks thousands of cases over hours; without this a
+-- mid-run interruption restarts it from zero, and in an environment that
+-- resets every hour or so it can never finish. Cleared at the start of a
+-- fresh update so the next one rechecks everything again.
+CREATE TABLE IF NOT EXISTS recheck_progress (
+    docket_no    TEXT PRIMARY KEY,
+    rechecked_at TEXT NOT NULL
+);
+
 -- Tracks which already-matched cases have had case_summary backfilled by
 -- a maintenance pass (see cli.py --backfill-case-summary), independent of
 -- processed_dockets/case_results so a re-run after a restart skips work
@@ -104,6 +114,28 @@ class Checkpoint:
                 (town, _now()),
             )
         self._conn.commit()
+
+    def is_rechecked(self, docket_no: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM recheck_progress WHERE docket_no = ?", (docket_no,)
+        )
+        return cur.fetchone() is not None
+
+    def mark_rechecked(self, docket_no: str) -> None:
+        with closing(self._conn.cursor()) as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO recheck_progress (docket_no, rechecked_at) VALUES (?, ?)",
+                (docket_no, _now()),
+            )
+        self._conn.commit()
+
+    def clear_recheck_progress(self) -> None:
+        """Start a fresh phase-2 pass -- every case becomes due again."""
+        self._conn.execute("DELETE FROM recheck_progress")
+        self._conn.commit()
+
+    def recheck_progress_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM recheck_progress").fetchone()[0]
 
     def clear_unmatched_dockets(self, docket_like: list[str]) -> int:
         """Forget processed-but-unmatched dockets whose docket_no matches

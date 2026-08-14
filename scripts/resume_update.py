@@ -46,6 +46,8 @@ def parse_args():
     p.add_argument("--export-xlsx", default="statewide_leads.xlsx")
     p.add_argument("--skip-phase1", action="store_true",
                    help="Phase 1 already finished; go straight to the recheck.")
+    p.add_argument("--reset-recheck", action="store_true",
+                   help="Start phase 2 over instead of resuming it.")
     return p.parse_args()
 
 
@@ -83,8 +85,15 @@ async def main():
                     new_dockets = {r.docket_no for r in checkpoint.all_case_results()} - set(before)
                     log.info("phase 1 done: %d genuinely new matched cases", len(new_dockets))
 
-                checked = 0
+                if args.reset_recheck:
+                    checkpoint.clear_recheck_progress()
+                already = checkpoint.recheck_progress_count()
+                if already:
+                    log.info("phase 2 resuming: %d/%d cases already rechecked", already, len(before))
+                checked = already
                 for docket_no, old_result in before.items():
+                    if checkpoint.is_rechecked(docket_no):
+                        continue
                     checked += 1
                     try:
                         new_result, changed = await recheck_matched_case(
@@ -95,6 +104,7 @@ async def main():
                         continue
                     if new_result is not old_result:
                         checkpoint.save_case_result(new_result)
+                    checkpoint.mark_rechecked(docket_no)
                     if changed:
                         updated_dockets.add(docket_no)
                         log.info("UPDATED  %s  %s  bucket %s -> %s", old_result.town,
