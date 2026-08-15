@@ -55,9 +55,8 @@ def ensure_best_checkpoint() -> tuple[int, int]:
 
     fd, tmp = tempfile.mkstemp(suffix=".sqlite3")
     os.close(fd)
-    blob = sh("git", "show", f"origin/{BRANCH}:statewide_checkpoint.sqlite3")
-    Path(tmp).write_bytes(blob.stdout.encode("latin-1") if isinstance(blob.stdout, str) else blob.stdout)
-    # binary via git show needs raw bytes; redo with stdout=PIPE in binary mode
+    # Binary blob -- must be read without text decoding (sh() decodes as
+    # utf-8 and a sqlite file is not valid utf-8).
     raw = subprocess.run(["git", "show", f"origin/{BRANCH}:statewide_checkpoint.sqlite3"],
                          cwd=REPO, capture_output=True)
     Path(tmp).write_bytes(raw.stdout)
