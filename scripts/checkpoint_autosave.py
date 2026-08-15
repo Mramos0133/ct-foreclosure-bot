@@ -73,7 +73,20 @@ def main():
     p.add_argument("--interval", type=int, default=600, help="Seconds between autosaves.")
     p.add_argument("--watch-process", default="ct_foreclosure_bot",
                    help="Stop once no process matches this pattern.")
+    p.add_argument("--once", action="store_true",
+                   help="Commit a single snapshot and exit. Use this instead of a "
+                        "sentinel --watch-process value: pgrep -f matches this "
+                        "process's own command line, so any sentinel makes it wait "
+                        "on itself forever.")
     args = p.parse_args()
+
+    if args.once:
+        try:
+            saved = commit_snapshot(args.db, "one-shot")
+            print(f"{'saved' if saved else 'no change'}", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"autosave FAILED: {exc}", flush=True)
+        return
 
     print(f"autosaving {args.db} every {args.interval}s while '{args.watch_process}' runs", flush=True)
     idle = 0

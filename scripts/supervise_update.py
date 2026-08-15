@@ -76,7 +76,7 @@ def ensure_best_checkpoint() -> tuple[int, int]:
 
 def commit_progress(note: str) -> None:
     r = subprocess.run([sys.executable, str(REPO / "scripts" / "checkpoint_autosave.py"),
-                        "--interval", "1", "--watch-process", "__none__"],
+                        "--once"],
                        cwd=REPO, capture_output=True, text=True, timeout=180)
     print("  " + (r.stdout.strip().splitlines() or ["autosave: no output"])[-1], flush=True)
 
