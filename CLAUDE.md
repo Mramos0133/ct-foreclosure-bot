@@ -113,6 +113,52 @@ section exists so the reasoning is not lost.
    -- and only reads "elapsed" once every avenue found has closed. An
    avenue opened after the last closure puts the case back to "open".
 
+## Running long jobs in this environment (IMPORTANT)
+
+This container periodically reverts the working tree to an older commit,
+killing any running process and discarding uncommitted work. It is not a
+bug in this code and cannot be prevented from inside -- the only defence
+is making runs resumable and committing constantly. A full statewide
+update was lost outright before these were in place.
+
+Before starting any long run:
+
+```
+python3 scripts/selftest_ops.py     # must exit 0
+```
+
+Then start it under the supervisor, never bare:
+
+```
+setsid nohup python3 scripts/supervise_update.py --max-legs 25 \
+  > runlogs/supervisor.log 2>&1 < /dev/null &
+```
+
+What each piece does:
+
+- `scripts/supervise_update.py` -- restarts each leg until the recheck
+  finishes. Before every leg it compares the LOCAL checkpoint against the
+  REMOTE one and keeps whichever has more rows in `recheck_progress`.
+  That comparison matters: after a container revert the remote is ahead,
+  but after an ordinary crash the local file is, and always resetting
+  would throw away up to one autosave interval of work.
+- `scripts/checkpoint_autosave.py` -- commits+pushes a consistent sqlite
+  snapshot every few minutes so a revert costs minutes, not hours. Use
+  `--once` for a single commit; NEVER pass a sentinel `--watch-process`
+  value, because `pgrep -f` matches the autosaver's own command line and
+  it will wait on itself forever.
+- `recheck_progress` (checkpoint.py) -- per-case marker making phase 2
+  resumable. Without it, phase 2 restarts from zero on every interruption
+  and can never finish in an environment that resets hourly.
+- `scripts/resume_update.py` -- the two update phases WITHOUT clearing
+  `completed_towns`. Use this to resume; plain `--update` clears town
+  progress and is only correct for a fresh run.
+
+A Routine ("CT foreclosure bot: resume statewide update") fires hourly and
+performs exactly this recovery, so a run continues while the user is
+logged out. Delete or disable it once the update is finished -- it is not
+meant to run forever.
+
 ## Lead classification rules
 
 See the module docstring in `lead_ranking.py` for the full HOT/WARM/COLD
