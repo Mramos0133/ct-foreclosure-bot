@@ -57,11 +57,17 @@ REMARKS_LIMIT = 200  # spec: first 200 chars of public remarks
 # field name -> candidate labels as printed on the detail page, tried in
 # order. First label that matches wins.
 LABELS: dict[str, list[str]] = {
-    "list_price_final": ["Current List Price", "List Price", "List Price (Final)"],
-    "list_price_original": ["Original List Price", "Orig List Price", "Original Price"],
-    "days_on_market": ["Days on Market", "DOM"],
+    # CONFIRMED 2026-08-14 off a real connectMLS "Listing" tab (302 Dover
+    # Street, Bridgeport) -- the "Marketing History" block prints exactly
+    # these labels. Anything still carrying an alternate spelling below is
+    # a fallback, not an observation.
+    "list_price_final": ["List Price", "Current List Price"],
+    "list_price_original": ["Original List Price", "Orig List Price"],
+    "previous_list_price": ["Previous List Price"],
+    "price_last_updated": ["Price Last Updated"],
+    "days_on_market": ["Days on Market", "DOM"],           # not seen on the Listing tab
     "cumulative_dom": ["Cumulative Days on Market", "CDOM", "Total DOM"],
-    "list_date": ["List Date", "Listing Date", "Original Entry Date"],
+    "list_date": ["Entered in MLS", "Start Marketing Date", "List Date"],
     "expiration_date": ["Expiration Date", "Expire Date", "Off Market Date"],
     "beds": ["Total Bedrooms", "Bedrooms", "Beds"],
     "full_baths": ["Full Baths", "Total Full Baths"],
@@ -77,8 +83,8 @@ LABELS: dict[str, list[str]] = {
     "property_type": ["Property Type", "Property Sub Type"],
     "town": ["Town", "City"],
     "zip_code": ["Zip Code", "Postal Code", "Zip"],
-    "listing_agent": ["Listing Agent", "List Agent", "Listing Member Name"],
-    "brokerage": ["Listing Office", "List Office", "Brokerage"],
+    "listing_agent": ["List Agent", "Listing Agent", "Listing Member Name"],
+    "brokerage": ["List Office", "Listing Office", "Brokerage"],
     "public_remarks": ["Public Remarks", "Remarks", "Marketing Remarks"],
 }
 
@@ -95,13 +101,23 @@ def load_label_overrides(path: str | Path | None) -> dict[str, list[str]]:
 
 
 def _value_after_label(text: str, label: str) -> str | None:
-    """Find `label:` (or `label` on its own) and return the value after it.
+    """Find `label:` and return the value after it.
 
-    Stops at the next label-looking token so a missing value cannot
-    swallow the following field's text.
+    The label must start a line or follow a column gap -- it is NOT
+    matched mid-string. That matters more than it looks: connectMLS
+    prints "List Price", "Original List Price" and "Previous List Price"
+    on adjacent lines, and "List Price" is a substring of both others. A
+    free-floating search finds whichever appears first in the document,
+    so asking for the final list price could quietly hand back the
+    original one. Anchoring makes each label match only itself.
+
+    The value stops at a column gap or end of line, so a field printed
+    with no value (connectMLS leaves "Price Last Updated:" blank when a
+    listing never changed price) cannot swallow the next field's text.
     """
     pattern = re.compile(
-        rf"{re.escape(label)}\s*:?\s*(.+?)(?=\s{{2,}}|\s*\|\s*|\n|$)",
+        rf"(?:^|\n|\s{{2,}}|\|)[ \t]*{re.escape(label)}[ \t]*:[ \t]*(.*?)"
+        rf"(?=\s{{2,}}|\s*\|\s*|\n|$)",
         re.IGNORECASE,
     )
     match = pattern.search(text)

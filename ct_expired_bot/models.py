@@ -28,13 +28,19 @@ NEEDS_MANUAL_REVIEW = "NEEDS_MANUAL_REVIEW"
 PORTAL_UNAVAILABLE = "PORTAL_UNAVAILABLE"
 
 # Statuses that count as "no longer listed" -- the listings this bot is for.
+#
+# connectMLS prints two different spellings depending on where you are.
+# The alert email and the API's MlsStatus say "Expired"; the agent-side
+# results grid uses the short code "EXPD" (confirmed 2026-08-14 from a
+# 180-match saved search). Both are accepted. The other short codes are
+# the obvious analogues and are NOT yet confirmed against a real row --
+# they cost nothing if wrong, since an unrecognised status is simply
+# skipped rather than mis-filed.
 EXPIRED_STATUSES = {
-    "expired",
-    "withdrawn",
-    "canceled",
-    "cancelled",
-    "temporarily off market",
-    "temp off market",
+    "expired", "expd",
+    "withdrawn", "with", "wdrn",
+    "canceled", "cancelled", "canc",
+    "temporarily off market", "temp off market", "tom",
 }
 
 
@@ -94,6 +100,11 @@ class MlsDetail:
     pull_error: str = ""
     list_price_final: str = NA
     list_price_original: str = NA
+    # connectMLS prints a 'Previous List Price' and the date it last
+    # changed. Together they prove whether a drop happened and when,
+    # even when the full history is not available.
+    previous_list_price: str = NA
+    price_last_updated: str = NA
     days_on_market: str = NA
     cumulative_dom: str = NA
     list_date: str = NA

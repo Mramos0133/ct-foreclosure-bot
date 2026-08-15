@@ -210,7 +210,19 @@ Still unconfirmed, and marked as such in the module docstrings:
   "MLS#:" label, line-oriented, reading `Town, CT ZIP`. The exact HTML
   tags are still unseen -- only a screenshot was available -- so the
   parser deliberately keys on text and line structure rather than markup.
-- `mls.py` (the HTML-scraping path) -- BOTH the detail-page URL and the field labels. SmartMLS
+- `mls.py` field labels are now CONFIRMED against a real connectMLS
+  "Listing" tab (302 Dover Street, Bridgeport, 2026-08-14). The
+  "Marketing History" block prints `List Price`, `Previous List Price`,
+  `Original List Price`, `Price Last Updated`, `Entered in MLS`,
+  `Start Marketing Date`, `Listing Last Updated`, `Expiration Date`;
+  agent/office are `List Agent` and `List Office`. Note that labels are
+  matched ANCHORED to a line start or column gap -- "List Price" is a
+  substring of both "Original List Price" and "Previous List Price", and
+  an unanchored search hands back the wrong figure.
+  The agent-side results grid prints the status as `EXPD`, not
+  `Expired`; both are in `EXPIRED_STATUSES`.
+  Days-on-market was NOT on the Listing tab and is still unfound.
+- `mls.py` (the HTML-scraping path) -- the detail-page URL. SmartMLS
   runs on **connectMLS (dynaConnections), not Matrix** (confirmed
   2026-08-13 from an alert link resolving to
   smartmls-portal.connectmls.com). There is deliberately no default URL:
@@ -234,4 +246,4 @@ Still unconfirmed, and marked as such in the module docstrings:
   reordered sheet does not shuffle them.
 - `N/A` means the source did not print it. Nothing is estimated.
 
-Tests: `python -m unittest discover -s tests -v` (64 tests, no network).
+Tests: `python -m unittest discover -s tests -v` (69 tests, no network).

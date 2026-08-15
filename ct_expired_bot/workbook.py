@@ -40,6 +40,8 @@ BOT_COLUMNS: list[tuple[str, object]] = [
     ("Zip", lambda l: l.mls.zip_code if l.mls.zip_code != NA else (l.alert.zip_code or NA)),
     ("List Price (Final)", lambda l: l.mls.list_price_final),
     ("Original List Price", lambda l: l.mls.list_price_original),
+    ("Previous List Price", lambda l: l.mls.previous_list_price),
+    ("Price Last Updated", lambda l: l.mls.price_last_updated),
     ("Days on Market", lambda l: l.mls.days_on_market),
     ("Cumulative DOM", lambda l: l.mls.cumulative_dom),
     ("List Date", lambda l: l.mls.list_date),

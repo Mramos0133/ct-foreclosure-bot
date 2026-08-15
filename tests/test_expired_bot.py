@@ -663,3 +663,83 @@ class TestUnknownVsZeroPriceDrops(unittest.TestCase):
         lead = self._derby_lead()
         score_lead(lead, today=date(2026, 8, 14))
         self.assertEqual(getter(lead), NA)
+
+
+# Transcribed from a real connectMLS "Listing" tab, 2026-08-14:
+# 302 Dover Street, Bridgeport CT 06610, MLS 24171033 area, $324,900.
+# Prices deliberately made DIFFERENT from the real row (which had all
+# three equal) so the substring-collision bug would actually show.
+REAL_LISTING_TAB = """Showing Instructions: Use Showing time and go
+Lock Box Description: Combo
+Lock Box Location: Front Door
+Directions: Boston Ave to dover ST
+Sign: No
+Owner Name / Phone: Whitheld /
+Occupied By: Vacant
+Bank Owned: No
+Listing Contract Type: Exclusive Right to Sell Listing Agreement
+Service Type: Full Service
+Potential Short Sale / Comments: No /
+Acceptable Financing: FHA, VA, CHFA
+Date Available: IMmediatly
+Listing Agent/Broker Information
+List Agent: Arbis Faustin (4119)
+List Office: Faustin Realty Group (4104)
+Marketing History
+List Price: $324,900
+Previous List Price: $349,900
+Original List Price: $379,900
+Price Last Updated: 06/15/2026
+List Price as % of Assessed Value: 405%
+Entered in MLS: 04/28/2026
+Start Marketing Date: 04/27/2026
+Listing Last Updated: 07/28/2026
+Expiration Date: 07/27/2026
+"""
+
+
+class TestRealListingTabLabels(unittest.TestCase):
+    """Pinned to labels read off a live connectMLS Listing tab."""
+
+    def _fields(self):
+        from ct_expired_bot.mls import LABELS, extract_fields
+
+        return extract_fields(REAL_LISTING_TAB, LABELS)
+
+    def test_list_price_is_not_the_original_list_price(self):
+        """'List Price' is a substring of 'Original List Price' and
+        'Previous List Price'. An unanchored search returns the wrong one.
+        """
+        fields = self._fields()
+        self.assertEqual(fields["list_price_final"], "$324,900")
+        self.assertEqual(fields["list_price_original"], "$379,900")
+        self.assertEqual(fields["previous_list_price"], "$349,900")
+
+    def test_marketing_history_dates(self):
+        fields = self._fields()
+        self.assertEqual(fields["expiration_date"], "07/27/2026")
+        self.assertEqual(fields["list_date"], "04/28/2026")
+        self.assertEqual(fields["price_last_updated"], "06/15/2026")
+
+    def test_agent_and_office(self):
+        fields = self._fields()
+        self.assertEqual(fields["listing_agent"], "Arbis Faustin (4119)")
+        self.assertEqual(fields["brokerage"], "Faustin Realty Group (4104)")
+
+    def test_blank_value_does_not_swallow_next_field(self):
+        """connectMLS leaves 'Price Last Updated:' empty when a listing
+        never changed price -- it must not absorb the following line.
+        """
+        from ct_expired_bot.mls import LABELS, extract_fields
+
+        blank = REAL_LISTING_TAB.replace("Price Last Updated: 06/15/2026", "Price Last Updated:")
+        fields = extract_fields(blank, LABELS)
+        self.assertNotIn("price_last_updated", fields)
+        self.assertEqual(fields["expiration_date"], "07/27/2026")
+
+    def test_expd_status_code_recognised(self):
+        """The results grid prints 'EXPD', not 'Expired'."""
+        from ct_expired_bot.models import EXPIRED_STATUSES
+
+        self.assertIn("expd", EXPIRED_STATUSES)
+        self.assertIn("expired", EXPIRED_STATUSES)
