@@ -76,7 +76,22 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         check("sqlite snapshot is readable", False, str(exc)[:160])
 
-    # 6. The checkpoint must carry the resumability tables; without them a
+    # 6. Runtime dependencies. A rebuilt container comes back WITHOUT the
+    #    pip packages or the tesseract binary, and the failure is silent
+    #    from outside: the supervisor just logs legs that make no progress.
+    import importlib, shutil
+    for mod in ("playwright", "bs4", "openpyxl", "pymupdf", "pytesseract", "PIL"):
+        try:
+            importlib.import_module(mod)
+            check(f"python dep: {mod}", True)
+        except ImportError as exc:
+            check(f"python dep: {mod}", False, f"{exc} -- pip install -r requirements.txt")
+    check("tesseract binary on PATH", shutil.which("tesseract") is not None,
+          "apt-get install -y tesseract-ocr -- OCR silently fails without it")
+    check("chromium present", Path("/opt/pw-browsers/chromium").exists(),
+          "set CT_BOT_CHROMIUM_PATH or reinstall browsers")
+
+    # 7. The checkpoint must carry the resumability tables; without them a
     #    long run restarts from zero on every interruption.
     try:
         con = sqlite3.connect(f"file:{REPO / 'statewide_checkpoint.sqlite3'}?mode=ro", uri=True)

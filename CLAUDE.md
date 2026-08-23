@@ -127,6 +127,16 @@ Before starting any long run:
 python3 scripts/selftest_ops.py     # must exit 0
 ```
 
+A rebuilt container comes back WITHOUT the pip packages or the tesseract
+binary, and that failure is silent from the outside -- the supervisor
+just logs leg after leg making no progress. The self-test checks for it;
+when it flags missing deps:
+
+```
+pip install -r requirements.txt
+apt-get install -y tesseract-ocr
+```
+
 Then start it under the supervisor, never bare:
 
 ```
