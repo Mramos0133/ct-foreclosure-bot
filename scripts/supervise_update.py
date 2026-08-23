@@ -28,10 +28,22 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "statewide_checkpoint.sqlite3"
 BRANCH = "claude/ct-foreclosure-scraper-3dmm7j"
+TOTAL_TOWNS = 169
 
 
 def sh(*args, check=False, **kw):
     return subprocess.run(args, cwd=REPO, capture_output=True, text=True, check=check, **kw)
+
+
+def towns_done(db_path) -> int:
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT COUNT(*) FROM completed_towns").fetchone()[0]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return -1
 
 
 def counts(db_path) -> tuple[int, int]:
@@ -91,8 +103,8 @@ def main():
     for leg in range(1, args.max_legs + 1):
         print(f"=== leg {leg} ===", flush=True)
         n, t = ensure_best_checkpoint()
-        if t > 0 and n >= t:
-            print(f"COMPLETE: {n}/{t} rechecked", flush=True)
+        if t > 0 and n >= t and towns_done(DB) >= TOTAL_TOWNS:
+            print(f"COMPLETE: {towns_done(DB)}/{TOTAL_TOWNS} towns, {n}/{t} rechecked", flush=True)
             return 0
 
         autosave = subprocess.Popen(
@@ -101,10 +113,17 @@ def main():
             cwd=REPO, stdout=open(REPO / "runlogs" / f"autosave_leg{leg}.log", "w"),
             stderr=subprocess.STDOUT,
         )
+        # Discovery first: only skip phase 1 once every town has been
+        # walked. A fresh run needs it; a resumed one usually does not.
+        cmd = [sys.executable, str(REPO / "scripts" / "resume_update.py")]
+        done = towns_done(DB)
+        if done >= TOTAL_TOWNS:
+            cmd.append("--skip-phase1")
+        else:
+            print(f"  phase 1 incomplete ({done}/{TOTAL_TOWNS} towns) -- running discovery too", flush=True)
         with open(REPO / "runlogs" / f"leg{leg}.log", "w") as lg:
             try:
-                subprocess.run([sys.executable, str(REPO / "scripts" / "resume_update.py"),
-                                "--skip-phase1"], cwd=REPO, env=env,
+                subprocess.run(cmd, cwd=REPO, env=env,
                                stdout=lg, stderr=subprocess.STDOUT, timeout=args.leg_timeout)
             except subprocess.TimeoutExpired:
                 print("  leg timed out -- moving on", flush=True)
@@ -117,7 +136,7 @@ def main():
         commit_progress(f"leg {leg}")
         n2, t2 = counts(DB)
         print(f"  after leg {leg}: {n2}/{t2}", flush=True)
-        if t2 > 0 and n2 >= t2:
+        if t2 > 0 and n2 >= t2 and towns_done(DB) >= TOTAL_TOWNS:
             print("COMPLETE", flush=True)
             return 0
         if n2 <= n:
