@@ -96,7 +96,11 @@ def commit_progress(note: str) -> None:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--max-legs", type=int, default=25)
-    p.add_argument("--leg-timeout", type=int, default=5400, help="Seconds before a stuck leg is killed.")
+    p.add_argument("--leg-timeout", type=int, default=1800,
+                   help="Seconds before a stuck leg is killed. A hung browser fetch is the "
+                        "common failure in this environment, and the process stays alive "
+                        "while making no progress -- so keep this short. At 5400 the "
+                        "supervisor sat on a dead leg for 90 minutes instead of restarting it.")
     args = p.parse_args()
 
     env = dict(os.environ, CT_BOT_CHROMIUM_PATH="/opt/pw-browsers/chromium")
