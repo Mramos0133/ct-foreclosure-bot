@@ -42,6 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--master", default="CT-Expired-Master.xlsx", help="Master workbook path (Leads / Town Portals / Meta). Created on first run.")
+    p.add_argument("--mls-export", default=None, help="connectMLS 'Export Listings' file (.xls/.xlsx/.csv). Supplies Steps 1 AND 2 -- no email or MLS session needed. This is the recommended input.")
     p.add_argument("--alerts-dir", default=None, help="Directory of saved SmartMLS alert emails (.eml/.html).")
     p.add_argument("--imap-host", default="", help="IMAP host for fetching alerts (e.g. outlook.office365.com, imap.gmail.com).")
     p.add_argument("--imap-user", default="", help="IMAP username. Password comes from CT_EXPIRED_IMAP_PASSWORD. NOTE: Microsoft disabled basic-auth IMAP on Exchange Online -- use the --graph-* options for an M365 mailbox.")
@@ -79,6 +80,7 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
     return RunConfig(
         master_path=Path(args.master).expanduser(),
         alerts_dir=Path(args.alerts_dir).expanduser() if args.alerts_dir else None,
+        mls_export=Path(args.mls_export).expanduser() if args.mls_export else None,
         imap_host=args.imap_host,
         imap_user=args.imap_user,
         imap_password=os.environ.get("CT_EXPIRED_IMAP_PASSWORD", ""),
@@ -189,11 +191,14 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.mls:
         return await _single_mls(args, config)
 
+    if config.mls_export:
+        pass  # export alone is a complete input
     has_graph = bool(config.graph_client_id and config.graph_tenant)
     has_imap = bool(config.imap_host and config.imap_user)
-    if not config.alerts_dir and not has_graph and not has_imap:
+    if not config.mls_export and not config.alerts_dir and not has_graph and not has_imap:
         print(
             "Nothing to read. Pass one of:\n"
+            "  --mls-export FILE                 (connectMLS Export Listings -- recommended)\n"
             "  --graph-client-id/--graph-tenant  (Microsoft 365 mailbox -- run --graph-login first)\n"
             "  --alerts-dir DIR                  (saved .eml/.html alert files)\n"
             "  --imap-host/--imap-user           (IMAP; not available on Exchange Online)",

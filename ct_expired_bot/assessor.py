@@ -47,6 +47,29 @@ log = logging.getLogger(__name__)
 
 MAX_CANDIDATES = 6  # cards fetched while disambiguating one address
 
+# Street-type words dropped from the SEARCH query. Vision matches the
+# address string literally against whatever the town happens to store,
+# and towns disagree: Bridgeport holds "575 BURNSFORD AV", Hamden holds
+# "75 WASHINGTON AVE". Searching "575 Burnsford Avenue" returns zero
+# hits in both. Searching "575 Burnsford" returns the right parcel in
+# both, and the full address is still used to verify the match, so
+# dropping the suffix widens the search without loosening the check.
+_STREET_TYPE_WORDS = {
+    "ST", "STREET", "AVE", "AV", "AVENUE", "RD", "ROAD", "DR", "DRIVE",
+    "LN", "LANE", "CT", "COURT", "PL", "PLACE", "BLVD", "BOULEVARD",
+    "TER", "TERR", "TERRACE", "CIR", "CIRCLE", "HWY", "HIGHWAY",
+    "PKWY", "PARKWAY", "TRL", "TRAIL", "SQ", "SQUARE", "WAY",
+    "TPKE", "TURNPIKE", "EXT", "EXTENSION", "PATH", "ROW", "RUN",
+}
+
+
+def search_query(address: str) -> str:
+    """Street number + name, with the street-type suffix removed."""
+    tokens = re.sub(r"[^A-Za-z0-9 ]", " ", (address or "")).split()
+    while tokens and tokens[-1].upper() in _STREET_TYPE_WORDS:
+        tokens.pop()
+    return " ".join(tokens) if tokens else (address or "").strip()
+
 # Confirmed Vision card element IDs (see module docstring).
 VISION_IDS = {
     "location": "MainContent_lblLocation",
@@ -122,7 +145,7 @@ async def _search_candidates(page: Page, portal_url: str, street_address: str) -
     """Return [(printed_address, parcel_url)] for an address search."""
     search_url = portal_url.rstrip("/") + "/Search.aspx"
     await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
-    await page.fill(SEARCH_ADDRESS_INPUT, street_address)
+    await page.fill(SEARCH_ADDRESS_INPUT, search_query(street_address))
     try:
         async with page.expect_navigation(wait_until="domcontentloaded", timeout=40000):
             await page.eval_on_selector(SEARCH_SUBMIT, "el => el.click()")
@@ -188,6 +211,7 @@ async def lookup_owner(
     portal: TownPortal,
     street_address: str,
     mls: MlsDetail,
+    unit: str = "",
 ) -> OwnerRecord:
     """Find and verify the assessor card for one listing.
 
@@ -232,6 +256,22 @@ async def lookup_owner(
 
         target = normalize_address(street_address)
         exact = [c for c in candidates if normalize_address(c[0]) == target]
+
+        # A condo building lists one parcel per unit ("75 WASHINGTON AVE
+        # #1101" ... "#1210"), so the street address alone matches twenty
+        # parcels equally well and year-built/sqft cannot separate them --
+        # they are usually identical. The unit number is the only thing
+        # that can, and the export carries it.
+        if unit and len(candidates) > 1:
+            wanted = normalize_address(unit)
+            unit_hits = [
+                c for c in candidates
+                if wanted and wanted in normalize_address(c[0]).split()
+            ]
+            if len(unit_hits) == 1:
+                record = await _read_card(page, unit_hits[0][1])
+                record.add_note(f"Matched unit {unit!r} among {len(candidates)} parcels.")
+                return _finalize(record, street_address, mls)
 
         if len(exact) == 1:
             record = await _read_card(page, exact[0][1])

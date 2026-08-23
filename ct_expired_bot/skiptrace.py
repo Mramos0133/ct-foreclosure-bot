@@ -136,6 +136,19 @@ def write_skiptrace_csv(
     return len(clean)
 
 
+def _review_reason(lead: Lead) -> str:
+    reasons = []
+    if getattr(lead.mls, "likely_rental", False):
+        reasons.append(
+            f"List price {lead.mls.list_price_final} looks like a monthly rent, "
+            "not a sale price -- confirm this is a sale listing"
+        )
+    note = lead.owner.notes_text()
+    if note:
+        reasons.append(note)
+    return "; ".join(reasons) or lead.owner.status
+
+
 def write_review_csv(path: str | Path, leads: list[Lead]) -> int:
     """Everything the vendor file refused, with the reason."""
     flagged = [l for l in leads if l.needs_review]
@@ -151,6 +164,6 @@ def write_review_csv(path: str | Path, leads: list[Lead]) -> int:
                 lead.alert.status,
                 lead.owner.owner_name,
                 lead.mls.pull_status,
-                lead.owner.notes_text() or lead.owner.status,
+                _review_reason(lead),
             ])
     return len(flagged)

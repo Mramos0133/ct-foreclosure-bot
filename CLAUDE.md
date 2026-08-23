@@ -118,6 +118,32 @@ python -m ct_expired_bot \
   --listing-url-template "https://<connectmls host>/...?mls={mls_no}"
 ```
 
+### BEST INPUT: the connectMLS export (`--mls-export`)
+
+Exporting the saved search from connectMLS (**Export Listings** ->
+choose a report -> All Matches) supplies Steps 1 AND 2 in one file: no
+email, no OAuth, no MLS session, no scraping. Prefer it.
+
+```
+python -m ct_expired_bot --mls-export "connectMLS_Skip_trace_*.XLS" \
+  --master "CT-Expired-Master.xlsx" --output-dir .
+```
+
+Confirmed against a real 103-row `.xls` (2026-08-23) -- see
+`mls_export.py` for the column list. Four traps, all handled, all real:
+
+- **ZIPs lose their leading zero** (06118 arrives as float `6118.0`).
+  Every CT ZIP is affected; a 4-digit ZIP breaks the assessor lookup.
+- **MLS numbers are floats too** (`24186595.0`), so dedupe never matches.
+- **Prices carry a prefix**: `LP: $339,000`.
+- **Rentals are mixed in with sales** (one row at `LP: $2,375`/mo).
+  Flagged `likely_rental` and routed to review, never priced as a sale.
+
+The export does NOT carry Original List Price, CDOM, list date, price
+history or remarks. Adding **Original List Price** to the export
+template is the single highest-value change -- without it there is no
+price-reduction figure at all.
+
 ### Reading the alert emails
 
 The operator's mail is on Exchange Online (`newerainvesting.com` MX ->
@@ -199,6 +225,18 @@ Verified live on 2026-08-04, with tests pinned to the observed values:
   `count_price_drops` returns None when no history was supplied, and
   scoring falls back to original-vs-final, which IS known: enough for
   Medium, never enough to claim the 2+ that means High.
+- **Vision search needs the street type REMOVED.** Vision matches the
+  address literally against whatever the town stores, and towns
+  disagree: Bridgeport holds `575 BURNSFORD AV`, Hamden `75 WASHINGTON
+  AVE`. Searching "575 Burnsford Avenue" returns zero hits in both;
+  "575 Burnsford" returns the right parcel in both. `search_query()`
+  strips the suffix, and `normalize_address` folds AV/AVE/AVENUE so the
+  verification still compares full addresses. Fixing this took a real
+  103-row run from 19 usable rows to 35.
+- **Condos need the unit number.** A condo building lists one parcel per
+  unit with identical year built and sqft, so those two cannot separate
+  them -- only the unit can. The export carries it; `strip_unit`/
+  `extract_unit` split it out and `lookup_owner` matches on it. 35 -> 40.
 - **The TLS 1.2 workaround** in `browser.py` is required here for the
   same proxy reason as `ct_foreclosure_bot/browser.py` -- without it,
   every gis.vgsi.com load fails ERR_CONNECTION_RESET.
@@ -246,4 +284,4 @@ Still unconfirmed, and marked as such in the module docstrings:
   reordered sheet does not shuffle them.
 - `N/A` means the source did not print it. Nothing is estimated.
 
-Tests: `python -m unittest discover -s tests -v` (69 tests, no network).
+Tests: `python -m unittest discover -s tests -v` (81 tests, no network).

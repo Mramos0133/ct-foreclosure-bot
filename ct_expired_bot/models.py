@@ -71,6 +71,10 @@ class AlertListing:
     """One Expired/Withdrawn/Canceled row scraped out of an alert email."""
     mls_no: str
     street_address: str
+    # Unit/apt designator split off the street address. Kept because
+    # a condo building has one parcel per unit on the assessor site,
+    # and without it every unit in the building looks equally likely.
+    unit: str = ""
     town: str = ""
     zip_code: str = ""
     status: str = ""
@@ -125,6 +129,10 @@ class MlsDetail:
     listing_agent: str = NA
     brokerage: str = NA
     public_remarks: str = NA  # first 200 chars only, per the spec
+    # A connectMLS export mixes expired RENTALS in with expired sales;
+    # the observed one listed at $2,375/mo. Priced as a sale that is a
+    # $2.46/sqft property, so it is flagged and sent to review.
+    likely_rental: bool = False
 
     def price_history_text(self) -> str:
         return " | ".join(c.as_text() for c in self.price_history) if self.price_history else NA
@@ -194,7 +202,11 @@ class Lead:
     @property
     def needs_review(self) -> bool:
         """Rows that must never reach the vendor CSV (spec Step 5)."""
-        return self.owner.status in (NEEDS_MANUAL_REVIEW, PORTAL_UNAVAILABLE)
+        if self.owner.status in (NEEDS_MANUAL_REVIEW, PORTAL_UNAVAILABLE):
+            return True
+        # A rental priced as a sale would ship a nonsense lead to the
+        # vendor; a human decides whether it is worth pursuing.
+        return bool(getattr(self.mls, "likely_rental", False))
 
 
 def dataclass_field_names(cls) -> list[str]:

@@ -40,6 +40,7 @@ FIRST_RUN_LOOKBACK_DAYS = 7
 class RunConfig:
     master_path: Path
     alerts_dir: Path | None = None
+    mls_export: Path | None = None
     imap_host: str = ""
     imap_user: str = ""
     imap_password: str = ""
@@ -161,7 +162,19 @@ async def run(config: RunConfig, today: date | None = None) -> RunReport:
     already_seen = wb_mod.existing_mls_numbers(master)
     registry = wb_mod.read_portals(master)
 
-    candidates = collect_alerts(config, since)
+    # A connectMLS export carries the listing detail with it, so those
+    # rows skip the MLS pull entirely (see mls_export.py).
+    exported: dict[str, MlsDetail] = {}
+    if config.mls_export:
+        from .mls_export import expired_only, load_export
+
+        for alert_row, detail_row in expired_only(load_export(config.mls_export)):
+            exported[alert_row.mls_no] = detail_row
+        candidates = [a for a, _ in expired_only(load_export(config.mls_export))]
+        candidates += collect_alerts(config, since)
+    else:
+        candidates = collect_alerts(config, since)
+
     new_listings = [l for l in candidates if l.mls_no not in already_seen]
     if config.limit:
         new_listings = new_listings[: config.limit]
@@ -179,7 +192,10 @@ async def run(config: RunConfig, today: date | None = None) -> RunReport:
             playwright, profile_dir=config.profile_dir, headless=config.headless
         )
         try:
-            if not await is_logged_in(context):
+            # Only a listing the export did not already describe needs an
+            # MLS session, so an export-only run must not nag about login.
+            needs_mls_session = any(l.mls_no not in exported for l in new_listings)
+            if needs_mls_session and not await is_logged_in(context):
                 report.warnings.append(
                     "SmartMLS session did not look logged in -- MLS pulls will likely "
                     "fail. Run with --login to refresh the profile's session."
@@ -188,10 +204,13 @@ async def run(config: RunConfig, today: date | None = None) -> RunReport:
             for index, listing in enumerate(new_listings, start=1):
                 log.info("[%d/%d] MLS %s %s", index, len(new_listings), listing.mls_no, listing.street_address)
 
-                detail = await fetch_detail(
-                    context, listing.mls_no, labels=labels,
-                    url_template=config.listing_url_template,
-                )
+                if listing.mls_no in exported:
+                    detail = exported[listing.mls_no]
+                else:
+                    detail = await fetch_detail(
+                        context, listing.mls_no, labels=labels,
+                        url_template=config.listing_url_template,
+                    )
                 if detail.pull_status == MLS_PULL_FAILED:
                     report.mls_failed += 1
 
@@ -200,7 +219,10 @@ async def run(config: RunConfig, today: date | None = None) -> RunReport:
                     portal = await _resolve_portal(
                         context, town, registry, discovered_portals, config.discover_portals
                     )
-                    owner = await lookup_owner(context, portal, listing.street_address, detail)
+                    owner = await lookup_owner(
+                        context, portal, listing.street_address, detail,
+                        unit=listing.unit,
+                    )
                 else:
                     owner = OwnerRecord(
                         status="NEEDS_MANUAL_REVIEW",

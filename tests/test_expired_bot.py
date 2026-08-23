@@ -743,3 +743,122 @@ class TestRealListingTabLabels(unittest.TestCase):
 
         self.assertIn("expd", EXPIRED_STATUSES)
         self.assertIn("expired", EXPIRED_STATUSES)
+
+
+class TestConnectMlsExport(unittest.TestCase):
+    """Pinned to the shapes seen in a real connectMLS "Skip trace" export
+    (103 rows, 2026-08-23). Values are reconstructed, not copied, but
+    every quirk below was observed in that file.
+    """
+
+    def test_zip_leading_zero_is_restored(self):
+        """Excel stores ZIPs as numbers, so 06118 arrives as 6118.0.
+        Every CT ZIP starts with 0, so every row is affected.
+        """
+        from ct_expired_bot.mls_export import normalize_zip
+
+        self.assertEqual(normalize_zip(6118.0), "06118")
+        self.assertEqual(normalize_zip(6706.0), "06706")
+        self.assertEqual(normalize_zip("06032"), "06032")
+        self.assertEqual(normalize_zip("06119-1234"), "06119")
+        self.assertEqual(normalize_zip(""), "")
+
+    def test_mls_number_is_not_a_float(self):
+        from ct_expired_bot.mls_export import row_to_records
+
+        alert, _ = row_to_records({"mls_no": 24186595.0, "status": "EXPD"})
+        self.assertEqual(alert.mls_no, "24186595")
+
+    def test_price_prefix_stripped(self):
+        from ct_expired_bot.mls_export import parse_price
+
+        self.assertEqual(parse_price("LP: $339,000"), "339000")
+        self.assertEqual(parse_price("$2,375"), "2375")
+        self.assertEqual(parse_price(""), NA)
+
+    def test_expd_status_normalised(self):
+        from ct_expired_bot.mls_export import normalize_status
+
+        self.assertEqual(normalize_status("EXPD"), "expired")
+        self.assertEqual(normalize_status("WITH"), "withdrawn")
+
+    def test_baths_split_and_bare_value_not_faked(self):
+        from ct_expired_bot.mls_export import split_baths
+
+        self.assertEqual(split_baths("2/1"), ("2", "1"))
+        self.assertEqual(split_baths("1/0"), ("1", "0"))
+        # A source that printed only full baths must not invent "0" halves.
+        self.assertEqual(split_baths("2"), ("2", NA))
+
+    def test_unit_variants_split_off_address(self):
+        """All three shapes appeared in one real export."""
+        from ct_expired_bot.mls_export import extract_unit, strip_unit
+
+        cases = [
+            ("16  Greenbriar Drive  , Unit# E", "16 Greenbriar Drive", "E"),
+            ("147 Hamden Avenue , Unit#", "147 Hamden Avenue", ""),
+            ("80 Sheldon Road , Unit# LOT 12", "80 Sheldon Road", "LOT 12"),
+            ("1423  Silver Lane", "1423 Silver Lane", ""),
+        ]
+        for raw, address, unit in cases:
+            self.assertEqual(strip_unit(raw), address, raw)
+            self.assertEqual(extract_unit(raw), unit, raw)
+
+    def test_rental_is_flagged_and_kept_out_of_the_vendor_file(self):
+        """The real export mixed in a $2,375/mo rental among the sales."""
+        from ct_expired_bot.mls_export import row_to_records
+
+        alert, detail = row_to_records({
+            "mls_no": 24186827.0, "status": "EXPD", "list_price": "LP: $2,375",
+            "address": "16 Greenbriar Drive, Unit# E", "city": "Farmington",
+            "zip_code": 6032.0, "sqft_above_grade": 966.0,
+        })
+        self.assertTrue(detail.likely_rental)
+        lead = make_lead(alert=alert, mls=detail, owner=OwnerRecord(owner_name="SMITH JOHN"))
+        self.assertTrue(lead.needs_review)
+
+        import tempfile as _t
+        out = Path(_t.mkdtemp())
+        self.assertEqual(write_skiptrace_csv(out / "v.csv", [lead]), 0)
+        self.assertEqual(write_review_csv(out / "r.csv", [lead]), 1)
+        self.assertIn("monthly rent", (out / "r.csv").read_text())
+
+    def test_normal_sale_is_not_flagged(self):
+        from ct_expired_bot.mls_export import row_to_records
+
+        _, detail = row_to_records({
+            "mls_no": 1.0, "status": "EXPD", "list_price": "LP: $339,000",
+        })
+        self.assertFalse(detail.likely_rental)
+
+    def test_status_timestamp_used_as_expiration(self):
+        from ct_expired_bot.mls_export import row_to_records
+
+        _, detail = row_to_records({
+            "mls_no": 1.0, "status": "EXPD", "status_timestamp": "07/28/2026",
+        })
+        self.assertEqual(detail.expiration_date, "07/28/2026")
+
+
+class TestAssessorSearchQuery(unittest.TestCase):
+    """Vision matches the address literally against whatever the town
+    stores, and towns disagree on the street-type abbreviation.
+    """
+
+    def test_street_type_dropped_from_query(self):
+        from ct_expired_bot.assessor import search_query
+
+        self.assertEqual(search_query("575 Burnsford Avenue"), "575 Burnsford")
+        self.assertEqual(search_query("75 Washington Avenue"), "75 Washington")
+        self.assertEqual(search_query("1 Coach Drive"), "1 Coach")
+        self.assertEqual(search_query("63GG Dudley Lane"), "63GG Dudley")
+
+    def test_query_survives_a_name_with_no_street_type(self):
+        from ct_expired_bot.assessor import search_query
+
+        self.assertEqual(search_query("Broadway"), "Broadway")
+
+    def test_short_and_long_street_types_compare_equal(self):
+        """Bridgeport stores 'AV', Hamden 'AVE', the MLS says 'Avenue'."""
+        self.assertTrue(addresses_match("575 BURNSFORD AV", "575 Burnsford Avenue"))
+        self.assertTrue(addresses_match("75 WASHINGTON AVE", "75 Washington Avenue"))

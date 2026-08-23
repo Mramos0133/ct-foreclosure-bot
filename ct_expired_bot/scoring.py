@@ -21,6 +21,11 @@ from .models import NA, Lead, MlsDetail, OwnerRecord, parse_money
 # Street-type and unit abbreviations folded to a canonical token before
 # comparing two addresses.
 _STREET_ABBREV = {
+    # Assessor cards print their own abbreviations and they are not
+    # consistent between towns -- Bridgeport stores "AV", Hamden "AVE".
+    # Both must fold to the same token or an exact-match comparison
+    # rejects the correct parcel.
+    "AV": "AVE", "AVEN": "AVE", "STR": "ST", "RDG": "RIDGE",
     "STREET": "ST", "AVENUE": "AVE", "ROAD": "RD", "DRIVE": "DR",
     "LANE": "LN", "COURT": "CT", "PLACE": "PL", "BOULEVARD": "BLVD",
     "TERRACE": "TER", "CIRCLE": "CIR", "HIGHWAY": "HWY", "PARKWAY": "PKWY",
