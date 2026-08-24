@@ -97,6 +97,36 @@ def save(note: str) -> None:
         print(f"  checkpoint: {'pushed' if saved else 'no change'}", flush=True)
     except Exception as exc:  # noqa: BLE001 -- a failed push must not lose the leg's work
         print(f"  checkpoint push FAILED: {exc}", flush=True)
+    else:
+        if saved:
+            _sync_worktree()
+
+
+def _sync_worktree() -> None:
+    """Leave the working tree clean after committing.
+
+    commit_snapshot() stages a backup-API *snapshot* blob via git plumbing
+    rather than the live file, so the two are byte-different (page layout,
+    freelist) even when every row matches. The tracked file therefore reads
+    as permanently modified, which buries any real uncommitted change in
+    noise. The scraper has already exited by the time this runs, so there is
+    no writer to race -- but verify row counts match before overwriting, and
+    leave the file alone if they do not, since the live file would then hold
+    work the commit does not.
+    """
+    try:
+        raw = subprocess.run(["git", "show", f"HEAD:{DB_REL}"], cwd=REPO, capture_output=True)
+        fd, tmp = tempfile.mkstemp(suffix=".sqlite3")
+        os.close(fd)
+        Path(tmp).write_bytes(raw.stdout)
+        same = counts(tmp) == counts(DB)
+        Path(tmp).unlink(missing_ok=True)
+        if same:
+            subprocess.run(["git", "checkout", "--", DB_REL], cwd=REPO, capture_output=True)
+        else:
+            print("  note: live checkpoint differs from commit -- leaving worktree as is", flush=True)
+    except Exception as exc:  # noqa: BLE001 -- cosmetic; never fail a leg over it
+        print(f"  worktree sync skipped: {exc}", flush=True)
 
 
 def main() -> int:
