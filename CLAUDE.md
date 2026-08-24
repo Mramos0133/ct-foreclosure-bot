@@ -115,59 +115,74 @@ section exists so the reasoning is not lost.
 
 ## Running long jobs in this environment (IMPORTANT)
 
-This container periodically reverts the working tree to an older commit,
-killing any running process and discarding uncommitted work. It is not a
-bug in this code and cannot be prevented from inside -- the only defence
-is making runs resumable and committing constantly. A full statewide
-update was lost outright before these were in place.
+**Background processes do not survive here. Never use them for a long run.**
 
-Before starting any long run:
+This container suspends roughly five minutes after the agent's turn ends,
+and it also periodically reverts the working tree to an older commit.
+Either way every running process dies. `setsid nohup ... &` does not help:
+measured twice on 2026-08-23, a supervisor launched at 21:21 stopped at
+21:27 and one launched at 21:52 stopped at 21:59, after which the run sat
+dead for 1h53m. Background supervision cannot fix this, because the
+supervisor is just one more process that dies with everything else.
+
+What keeps the container alive is an **in-flight foreground tool call**.
+So the work has to happen inside a turn:
 
 ```
-python3 scripts/selftest_ops.py     # must exit 0
+python3 scripts/selftest_ops.py             # must exit 0 first
+python3 scripts/run_leg.py --budget 540     # blocking; repeat until exit 0
 ```
+
+`scripts/run_leg.py` is the unit of work. Each call reconciles the local
+checkpoint against the remote, scrapes for its budget, then commits and
+pushes, so an interruption at any moment costs at most the current case.
+Keep `--budget` UNDER the caller's own timeout (540s against a 600s Bash
+timeout) so the leg exits cleanly and commits instead of being killed
+mid-write. Exit code 0 means the whole update is finished, 2 means call
+it again. About five calls fit in one turn.
 
 A rebuilt container comes back WITHOUT the pip packages or the tesseract
-binary, and that failure is silent from the outside -- the supervisor
-just logs leg after leg making no progress. The self-test checks for it;
-when it flags missing deps:
+binary, and that failure is silent from outside -- legs just make no
+progress. The self-test catches it; when it flags missing deps:
 
 ```
 pip install -r requirements.txt
 apt-get install -y tesseract-ocr
 ```
 
-Then start it under the supervisor, never bare:
+Supporting pieces:
 
-```
-setsid nohup python3 scripts/supervise_update.py --max-legs 25 \
-  > runlogs/supervisor.log 2>&1 < /dev/null &
-```
-
-What each piece does:
-
-- `scripts/supervise_update.py` -- restarts each leg until the recheck
-  finishes. Before every leg it compares the LOCAL checkpoint against the
-  REMOTE one and keeps whichever has more rows in `recheck_progress`.
-  That comparison matters: after a container revert the remote is ahead,
-  but after an ordinary crash the local file is, and always resetting
-  would throw away up to one autosave interval of work.
-- `scripts/checkpoint_autosave.py` -- commits+pushes a consistent sqlite
-  snapshot every few minutes so a revert costs minutes, not hours. Use
-  `--once` for a single commit; NEVER pass a sentinel `--watch-process`
-  value, because `pgrep -f` matches the autosaver's own command line and
-  it will wait on itself forever.
 - `recheck_progress` (checkpoint.py) -- per-case marker making phase 2
   resumable. Without it, phase 2 restarts from zero on every interruption
   and can never finish in an environment that resets hourly.
 - `scripts/resume_update.py` -- the two update phases WITHOUT clearing
-  `completed_towns`. Use this to resume; plain `--update` clears town
-  progress and is only correct for a fresh run.
+  `completed_towns`. `run_leg.py` drives this; plain `--update` clears
+  town progress and is only correct for a fresh run.
+- `scripts/checkpoint_autosave.py` -- `commit_snapshot()` writes a
+  consistent sqlite snapshot via the backup API and stages it with git
+  plumbing. Use `--once` for a single commit; NEVER pass a sentinel
+  `--watch-process` value, because `pgrep -f` matches the autosaver's own
+  command line and it will wait on itself forever.
+- `scripts/export_final.py` -- the finishing step. Diffs the checkpoint
+  against a baseline commit and exports the workbook with green (new) /
+  yellow (updated) rows via `export_to_xlsx()`.
 
-A Routine ("CT foreclosure bot: resume statewide update") fires hourly and
-performs exactly this recovery, so a run continues while the user is
-logged out. Delete or disable it once the update is finished -- it is not
-meant to run forever.
+To run unattended, create an hourly Routine that does the loop above IN
+THE FOREGROUND (five `run_leg.py` calls per firing, ~45 min of real work
+per hour). A Routine that merely relaunches a background supervisor is
+useless here -- that was tried and yielded ~6 minutes of work per hour.
+**Delete the Routine once the run finishes**; it does not stop on its own,
+and one was left firing for five hours after a completed run.
+
+Never use `pgrep -f <pattern>` to check whether these scripts are alive:
+it matches the checking command's own command line and reports RUNNING for
+a process that died hours ago. Use a self-excluding check:
+
+```
+ps -eo pid,etime,args | awk '/python3? .*(run_leg|resume_update)\.py/ && !/awk/'
+```
+
+`scripts/supervise_update.py` is kept only for reference. Do not start it.
 
 ## Lead classification rules
 
