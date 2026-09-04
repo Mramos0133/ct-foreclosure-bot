@@ -94,11 +94,14 @@ section exists so the reasoning is not lost.
 
 3. **A recently-closed assistance window is HOT on its own.** When
    mediation expired/terminated or EMAP was denied/expired within
-   `ASSISTANCE_ELAPSED_HOT_MAX_MONTHS` (3), the case is HOT regardless of
+   `ASSISTANCE_ELAPSED_HOT_MAX_MONTHS` (6), the case is HOT regardless of
    whether a complaint is on record -- the owner's rescue options are
-   spent and the foreclosure resumes. Capped at 3 months because the
-   older tail is large and stale (268 of 589 statewide had elapsed 1+
-   years ago) and a lapse from last year is not a live lead.
+   spent and the foreclosure resumes. Widened 3 -> 6 on 2026-08-29 after
+   profiling UNCLASSIFIED: of 482 cases there with a closed window, none
+   had elapsed within 3 months (already swept into HOT) but 52 sat in the
+   3-6 month band. The cap still excludes the stale tail -- 154 elapsed
+   6-12 months ago and 276 over a year ago, and a lapse from last year
+   with nothing since is a closed file, not a live lead.
    `scripts/reclassify_offline.py` applies this to the whole checkpoint
    with no network, since both inputs are persisted.
 

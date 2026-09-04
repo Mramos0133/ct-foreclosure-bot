@@ -113,11 +113,16 @@ ASSISTANCE_PROGRAM_HOT_MAX_MONTHS = 12
 
 # A closed loan-assistance window (mediation expired/terminated, or EMAP
 # denied/expired) is itself a HOT signal, independent of any complaint --
-# the owner's rescue options are spent and the foreclosure resumes. Capped
-# at 3 months per explicit instruction: a mediation that lapsed a year ago
-# with nothing since is a stale case, not a live lead, and the older tail
-# is large (268 of 589 statewide had elapsed 1+ years ago).
-ASSISTANCE_ELAPSED_HOT_MAX_MONTHS = 3
+# the owner's rescue options are spent and the foreclosure resumes.
+#
+# Widened 3 -> 6 months on 2026-08-29 per explicit request, after profiling
+# the UNCLASSIFIED sheet: of 482 unclassified cases with a closed assistance
+# window, NONE had elapsed within 3 months (the old rule had already swept
+# those into HOT), while 52 sat in the 3-6 month band -- recent enough that
+# the owner's options are genuinely spent. The cap stays well short of the
+# stale tail: 154 elapsed 6-12 months ago and 276 over a year ago, and a
+# lapse from last year with nothing since is a closed file, not a live lead.
+ASSISTANCE_ELAPSED_HOT_MAX_MONTHS = 6
 
 # A bank/lender-filed complaint counts as "recent" (and therefore HOT --
 # see module docstring) when filed within this many months of today AND
