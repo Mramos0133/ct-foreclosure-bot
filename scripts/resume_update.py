@@ -51,6 +51,36 @@ def parse_args():
     return p.parse_args()
 
 
+async def fetch_auction_listing_with_retry(context, throttle, attempts: int = 4):
+    """Fetch the statewide pending-sale listing, retrying transient failures.
+
+    This runs before BOTH phases, so an unguarded failure here costs the
+    entire leg -- a single ECONNRESET on one town's detail page burned a
+    full 9-minute budget for zero progress.
+
+    Deliberately does NOT fall back to an empty listing. The listing sets
+    on_auction_site, which is in update_run.MEANINGFUL_FIELDS and gates the
+    judgment/non-appearing HOT rule, so an empty one would silently flip
+    that flag to False on every case already posted for sale: hundreds of
+    spurious "updated" rows and real bucket corruption. Failing the leg is
+    recoverable -- the next leg resumes from the same checkpoint -- whereas
+    writing wrong classifications is not.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            log.info("fetching statewide auction listing (attempt %d/%d)...", attempt, attempts)
+            return await fetch_statewide_auction_listing(context, throttle)
+        except Exception as exc:  # noqa: BLE001 -- any transport error is worth one more try
+            if attempt == attempts:
+                log.error("auction listing failed %d times; aborting leg rather than "
+                          "reclassifying against an empty listing", attempts)
+                raise
+            delay = 2 ** attempt
+            log.warning("auction listing attempt %d failed (%s); retrying in %ds",
+                        attempt, type(exc).__name__, delay)
+            await asyncio.sleep(delay)
+
+
 async def main():
     args = parse_args()
     checkpoint = Checkpoint(args.checkpoint_db)
@@ -69,8 +99,7 @@ async def main():
             browser = await launch_browser(p, headless=True)
             try:
                 context = await new_context(browser)
-                log.info("fetching statewide auction listing...")
-                auction_listing = await fetch_statewide_auction_listing(context, throttle)
+                auction_listing = await fetch_auction_listing_with_retry(context, throttle)
                 log.info("auction listing: %d pending sales", len(auction_listing))
 
                 if not args.skip_phase1:
