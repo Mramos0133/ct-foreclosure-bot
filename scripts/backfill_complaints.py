@@ -26,6 +26,7 @@ import json
 import sqlite3
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -63,6 +64,23 @@ def parse_args():
     return p.parse_args()
 
 
+def _implausible_stored(value) -> bool:
+    """True when a stored unpaid-since value cannot be a real default date.
+
+    The old patterns fell back to raw matched text when parsing failed and
+    applied no date bounds, so the checkpoint holds a few values that are
+    unparseable or in the future. Only these are safe to clear on a read
+    that produced nothing; a plausible stored date is left alone.
+    """
+    if not value:
+        return False
+    try:
+        d = date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return True  # raw un-parsed text, e.g. "February |"
+    return d > date.today() or d < date(1990, 1, 1)
+
+
 def todo(con) -> list[dict]:
     done = {r[0] for r in con.execute("SELECT docket_no FROM complaint_backfilled")}
     out = []
@@ -96,7 +114,7 @@ async def main() -> int:
     checkpoint = Checkpoint(str(REPO / args.checkpoint_db))
     con = sqlite3.connect(REPO / args.checkpoint_db)
     throttle = Throttle(min_delay=2.0, max_delay=3.0)
-    gained_date = gained_principal = attempted = failed = 0
+    gained_date = gained_principal = attempted = failed = cleared = 0
 
     try:
         async with async_playwright() as p:
@@ -127,10 +145,21 @@ async def main() -> int:
                         gained_date += 1
                     if new_principal is not None and result.complaint_principal_amount is None:
                         gained_principal += 1
-                    # Only ever fill or correct from a fresh read; never blank
-                    # a value that is already on the sheet.
+
+                    # Fill or correct from a fresh read, and never blank a
+                    # good value just because the new patterns missed it.
+                    # The exception is a stored value that is itself
+                    # implausible -- a future or pre-1990 default date is a
+                    # mis-parse from the old patterns, and keeping it would
+                    # put a bad date on a call list. This read is clean (the
+                    # fetch succeeded), so its verdict supersedes.
                     if new_date:
                         result.complaint_unpaid_since = new_date
+                    elif _implausible_stored(result.complaint_unpaid_since):
+                        print(f"  {docket}: clearing implausible stored date "
+                              f"{result.complaint_unpaid_since!r}", flush=True)
+                        result.complaint_unpaid_since = None
+                        cleared += 1
                     if new_principal is not None:
                         result.complaint_principal_amount = new_principal
                     checkpoint.save_case_result(result)
@@ -151,7 +180,7 @@ async def main() -> int:
         con.close()
 
     print(f"  read {attempted}, +{gained_date} new dates, +{gained_principal} new principals, "
-          f"{failed} fetch failures", flush=True)
+          f"{failed} fetch failures, {cleared} implausible cleared", flush=True)
     try:
         saved = commit_snapshot(DB_REL, f"complaint backfill: {total_scope - remaining}/{total_scope}")
         print(f"  checkpoint: {'pushed' if saved else 'no change'}", flush=True)
