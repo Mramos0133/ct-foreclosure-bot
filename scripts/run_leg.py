@@ -80,8 +80,18 @@ def reconcile() -> tuple[int, int, int]:
     Path(tmp).unlink(missing_ok=True)
 
     print(f"  local={lt}t/{lc}c/{ln}r   remote={rt}t/{rc}c/{rn}r", flush=True)
-    # Rank by total work done, so neither phase can be silently rolled back.
-    if (rn, rt, rc) > (ln, lt, lc):
+    # Rank by CASE COUNT first, then rechecked. Case count is the reliable
+    # "which dataset is newer" signal: rows are only ever added to
+    # case_results (start_fresh_update.py clears the progress tables but
+    # deliberately keeps the cases), so it never decreases across runs.
+    #
+    # Ranking by rechecked first was wrong and silently destructive: when
+    # the container reverted the tree to the PREVIOUS run's commit, local
+    # held an old but COMPLETE checkpoint (2422 cases, 2422 rechecked) and
+    # remote held the current in-progress one (2523 cases, 2037 rechecked).
+    # Rechecked-first picked the stale local, then reported COMPLETE and
+    # would have exported a workbook from 16-day-old data.
+    if (rc, rn) > (lc, ln):
         print("  remote is ahead (container reverted) -> resetting to remote", flush=True)
         subprocess.run(["git", "reset", "--hard", f"origin/{BRANCH}"], cwd=REPO, capture_output=True)
         return counts(DB)
