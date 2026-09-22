@@ -102,6 +102,15 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         check("checkpoint has resumability tables", False, str(exc)[:160])
 
+    # 8. The complaint extraction patterns. These are pure regex over fixed
+    #    fixtures -- no network, fast -- and they silently degrade rather
+    #    than crash when wrong, which is exactly how the old P&I-unpaid-since
+    #    patterns sat at an 8% hit rate unnoticed.
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "selftest_complaint_patterns.py")],
+                       capture_output=True, text=True, timeout=120)
+    failing = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("FAIL")]
+    check("complaint extraction patterns", r.returncode == 0, "; ".join(failing)[:200])
+
     print(f"\n{len(FAILURES)} failure(s)" if FAILURES else "\nall checks passed")
     return 1 if FAILURES else 0
 
