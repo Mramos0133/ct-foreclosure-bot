@@ -85,12 +85,19 @@ Bucket priority when a case could arguably fit more than one: the two
 EMAP/loan-mod-then-failed, each within their own month window) are
 checked first and are independent of each other -- either one alone is
 enough, and both can be true at once. Then WARM for bankruptcy-then-
-reopened cases outside the HOT window, then COLD (multiple continuances
-mean it's already been shopped, regardless of appearance status), then
-the original judgment/non-appearing HOT rule, else UNCLASSIFIED for a
-matched case that doesn't cleanly fit any of the three (most commonly:
-the judgment motion hasn't actually been granted yet, or a case with none
-of the distinguishing signals above).
+reopened cases outside the HOT window, then the original judgment/
+non-appearing HOT rule, then COLD for multiple continuances, else
+UNCLASSIFIED for a matched case that doesn't cleanly fit any of them
+(most commonly: the judgment motion hasn't actually been granted yet).
+
+Judgment/non-appearing was moved AHEAD of the continuance demotion on
+2026-09-27. With continuances first, a case could satisfy every condition
+of the cleanest HOT rule and still be filed COLD for having been
+continued twice -- statewide that was 47 COLD cases resting on continuance
+count alone, 20 of which met the full HOT criteria. Continuances now
+demote only what the HOT rules have not already claimed. The equity
+override in the caller still outranks everything here, so a case without
+real equity is forced COLD / POTENTIAL_SHORT_SALE either way.
 """
 
 from dataclasses import dataclass
@@ -396,15 +403,30 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: d
         ranking.lead_bucket = "WARM"
     elif bankruptcy_stay_reopened:
         ranking.lead_bucket = "WARM"
-    elif ranking.continuance_count >= 2:
-        ranking.lead_bucket = "COLD"
     elif (
         ranking.judgment_granted
         and ranking.non_appearing
         and not ranking.on_auction_site
         and not key_date_in_past
     ):
+        # Checked BEFORE the continuance demotion below, reversed on
+        # 2026-09-27. A judgment entered against a non-appearing defendant
+        # on a case not yet public on the auction site is the cleanest lead
+        # this bot produces, and continuance-first buried it: statewide, 47
+        # COLD cases were COLD on continuance count alone and 20 of those
+        # met every condition of this rule. The example that surfaced it,
+        # HHD-CV-25-6203191-S, had judgment granted, a non-appearing
+        # defendant, and debt at 50% of appraised value -- demoted purely
+        # for having 7 Law Day extensions.
+        #
+        # Safe to promote here because the equity override still runs
+        # afterwards in the caller and outranks this: a case with no real
+        # equity is forced to COLD / POTENTIAL_SHORT_SALE regardless of
+        # what this returns. Continuances demote only what equity has not
+        # already decided.
         ranking.lead_bucket = "HOT"
+    elif ranking.continuance_count >= 2:
+        ranking.lead_bucket = "COLD"
     else:
         ranking.lead_bucket = "UNCLASSIFIED"
 

@@ -94,6 +94,28 @@ LINE_LABELS = {
 }
 
 
+# Below this, an "Updated debt" reading is OCR noise rather than a real
+# figure. Foreclosure actions do get brought over small liens -- a condo
+# association lien can legitimately be a few thousand dollars -- so this
+# floor sits far below any genuine claim rather than at a percentage of
+# the appraised value, which would throw those real small-lien cases away.
+# What it catches is the label-to-value mismatch in _find_money_lines:
+# when the same-row value is unreadable it falls back to the nearest money
+# token on the page, which is often a fee or a line number, producing
+# readings like $2.00 or $18.20 against a $470,000 appraisal. Statewide
+# those accounted for 202 of 1,531 cases with both figures (13%), and
+# because they flow straight into the equity ratio they were silently
+# deciding COLD / POTENTIAL_SHORT_SALE buckets.
+MIN_PLAUSIBLE_DEBT = 1_000.0
+
+
+def _plausible_debt(value: float | None) -> float | None:
+    """The debt figure, or None when it is too small to be a real claim."""
+    if value is None:
+        return None
+    return value if value >= MIN_PLAUSIBLE_DEBT else None
+
+
 def _normalize_amount(token: str) -> float | None:
     token = token.strip()
     m = re.match(r"^(-?)([\d,.]*?)[.,](\d{2})$", token)
@@ -321,8 +343,9 @@ def extract_worksheet_fields(document_no: str, document_url: str, pdf_bytes: byt
         raw_lines={k: v["raw_line"] for k, v in parsed.items()},
     )
 
+    raw_updated_debt = _to_float(parsed.get("updated_debt", {}).get("money"))
     fields.appraised_value = _to_float(parsed.get("fair_market_value", {}).get("money"))
-    fields.updated_debt = _to_float(parsed.get("updated_debt", {}).get("money"))
+    fields.updated_debt = _plausible_debt(raw_updated_debt)
     fields.total_debt_plus_prior_encumbrances = _to_float(
         parsed.get("total_debt_plus_prior_encumbrances", {}).get("money")
     )
@@ -356,10 +379,23 @@ def extract_worksheet_fields(document_no: str, document_url: str, pdf_bytes: byt
     #      here, just not in case 2).
     if fields.updated_debt is None:
         fields.ocr_validated = False
-        fields.ocr_warning = (
-            "could not locate a value for 'Updated debt' (line 2) via OCR "
-            "-- Total Debt is unavailable for this case, needs manual review"
-        )
+        if raw_updated_debt is not None:
+            # Located, then rejected as too small to be a real claim. Worth
+            # saying so explicitly: the reviewer needs to know a number WAS
+            # read off the page and deliberately discarded, not that the
+            # line was blank.
+            fields.ocr_warning = (
+                f"'Updated debt' (line 2) read as {raw_updated_debt:.2f}, below the "
+                f"{MIN_PLAUSIBLE_DEBT:.0f} plausibility floor -- almost certainly the "
+                "nearest-money fallback latching onto a fee or line number rather than "
+                "the debt. Treated as unknown so it cannot drive the equity bucket; "
+                "needs manual review"
+            )
+        else:
+            fields.ocr_warning = (
+                "could not locate a value for 'Updated debt' (line 2) via OCR "
+                "-- Total Debt is unavailable for this case, needs manual review"
+            )
     elif fields.total_debt_plus_prior_encumbrances is None:
         fields.ocr_validated = True
         fields.ocr_warning = (

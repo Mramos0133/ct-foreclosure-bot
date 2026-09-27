@@ -111,6 +111,13 @@ def main() -> int:
     failing = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("FAIL")]
     check("complaint extraction patterns", r.returncode == 0, "; ".join(failing)[:200])
 
+    # 9. Bucket priority and the debt plausibility floor. Same silent-failure
+    #    shape: a wrong answer is a plausible-looking bucket, not an error.
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "selftest_ranking_rules.py")],
+                       capture_output=True, text=True, timeout=120)
+    failing = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("FAIL")]
+    check("bucket priority and debt floor", r.returncode == 0, "; ".join(failing)[:200])
+
     print(f"\n{len(FAILURES)} failure(s)" if FAILURES else "\nall checks passed")
     return 1 if FAILURES else 0
 
