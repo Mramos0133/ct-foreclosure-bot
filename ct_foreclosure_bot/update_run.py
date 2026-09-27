@@ -162,6 +162,14 @@ def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> C
         recent_complaint_hot=ranking.recent_complaint_hot,
         recent_complaint_warm=ranking.recent_complaint_warm,
         assistance_program_hot=ranking.assistance_program_hot,
+        # These two were previously omitted, which left the record
+        # internally inconsistent: decide_bucket would set a case HOT on
+        # the assistance-elapsed rule, lead_bucket was persisted, and the
+        # flag behind it was not -- so the "HOT: Assistance Just Elapsed"
+        # column read N on cases that were HOT for exactly that reason.
+        # It disagreed with a fresh computation on 442 of 2565 cases.
+        assistance_elapsed_hot=ranking.assistance_elapsed_hot,
+        bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,
         assistance_program_label=analysis.assistance_program_label,
         # Persist the INPUT alongside the derived flag. Storing only the
         # flag leaves the record internally inconsistent, so anything that

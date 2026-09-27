@@ -34,16 +34,54 @@ import argparse
 import json
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ct_foreclosure_bot.checkpoint import Checkpoint
-from ct_foreclosure_bot.lead_ranking import equity_bucket_override, short_sale_ratio
+from ct_foreclosure_bot.lead_ranking import (
+    equity_bucket_override, is_assistance_elapsed_hot, is_bankruptcy_reopen_hot,
+    short_sale_ratio,
+)
 from ct_foreclosure_bot.models import CaseResult
 from ct_foreclosure_bot.worksheet import MIN_PLAUSIBLE_DEBT, _plausible_debt
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def _d(iso):
+    if not iso:
+        return None
+    try:
+        return date.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+
+
+def correct_hot_flags(r: CaseResult, today: date) -> dict:
+    """Recompute the two HOT flags reclassify_from_docket forgot to persist.
+
+    It rebuilt lead_bucket from a fresh decide_bucket but left
+    assistance_elapsed_hot and bankruptcy_reopen_hot at whatever was
+    stored, so a case could sit in HOT *because* its assistance window had
+    just closed while the column reporting that read N. Both inputs are on
+    the record, so the flags recompute exactly rather than being guessed.
+    """
+    want_elapsed = bool(
+        r.assistance_state == "elapsed"
+        and is_assistance_elapsed_hot(_d(r.assistance_elapsed_date), today)
+    )
+    want_bk = bool(
+        r.bankruptcy_stay_reopened
+        and is_bankruptcy_reopen_hot(_d(r.bankruptcy_filed_date), today)
+    )
+    out = {}
+    if bool(r.assistance_elapsed_hot) != want_elapsed:
+        out["assistance_elapsed_hot"] = want_elapsed
+    if bool(r.bankruptcy_reopen_hot) != want_bk:
+        out["bankruptcy_reopen_hot"] = want_bk
+    return out
 
 
 def parse_args():
@@ -74,8 +112,14 @@ def main() -> int:
     con.close()
 
     promoted, debt_cleared, bucket_now_stale = [], [], []
+    flag_fixes = []
+    today = date.today()
 
     for r in records:
+        fixes = correct_hot_flags(r, today)
+        if fixes:
+            flag_fixes.append((r, fixes))
+
         bad_debt = r.total_debt is not None and _plausible_debt(r.total_debt) is None
         if bad_debt:
             # Was this figure the only thing putting the case in its bucket?
@@ -94,6 +138,10 @@ def main() -> int:
         ):
             promoted.append(r)
 
+    ef = sum(1 for _r, f in flag_fixes if "assistance_elapsed_hot" in f)
+    bf = sum(1 for _r, f in flag_fixes if "bankruptcy_reopen_hot" in f)
+    print(f"stale HOT flags corrected:                    {len(flag_fixes)}"
+          f"  (assistance_elapsed {ef}, bankruptcy_reopen {bf})")
     print(f"promotions COLD -> HOT (reordering):           {len(promoted)}")
     print(f"implausible debt figures cleared (< {MIN_PLAUSIBLE_DEBT:.0f}):  {len(debt_cleared)}")
     print(f"  ...whose bucket rested on that figure:      {len(bucket_now_stale)}")
@@ -121,12 +169,17 @@ def main() -> int:
         for r, _old in debt_cleared:
             r.total_debt = None
             cp.save_case_result(r)
+        for r, fixes in flag_fixes:
+            for k, v in fixes.items():
+                setattr(r, k, v)
+            cp.save_case_result(r)
         for r in promoted:
             r.lead_bucket = "HOT"
             cp.save_case_result(r)
     finally:
         cp.close()
-    print(f"\nwrote {len(promoted)} promotions and {len(debt_cleared)} cleared debt figures")
+    print(f"\nwrote {len(promoted)} promotions, {len(debt_cleared)} cleared debt figures, "
+          f"{len(flag_fixes)} flag corrections")
     return 0
 
 
