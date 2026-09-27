@@ -85,12 +85,19 @@ section exists so the reasoning is not lost.
 
 2. **Equity outranks distress.** (debt + subsequent encumbrances) as a
    share of appraised value:
-   - `> 75%` (`COLD_RATIO`) -> **COLD**
    - `> 85%` (`SHORT_SALE_RATIO`) -> **POTENTIAL_SHORT_SALE**
-   Both override every HOT/WARM distress signal -- no equity means no
-   deal however motivated the owner. Applied only when debt AND appraised
+   - `> 85%` (`COLD_RATIO`) -> **COLD** -- band is EMPTY, see below
+   Overrides every HOT/WARM distress signal -- no equity means no deal
+   however motivated the owner. Applied only when debt AND appraised
    value are both known; a case is never penalized for a figure the OCR
-   failed to read.
+   failed to read, and an "Updated debt" reading below
+   `MIN_PLAUSIBLE_DEBT` ($1,000) is treated as unread rather than as fact.
+
+   COLD_RATIO was raised 0.75 -> 0.85 on 2026-09-27 per explicit
+   instruction. Since SHORT_SALE_RATIO is also 0.85 and is tested first,
+   equity no longer forces COLD at all; COLD is now reachable only via the
+   continuance rule. Raise SHORT_SALE_RATIO above 0.85 to reopen a
+   distinct COLD band between the two.
 
 3. **A recently-closed assistance window is HOT on its own.** When
    mediation expired/terminated or EMAP was denied/expired within
@@ -186,6 +193,23 @@ ps -eo pid,etime,args | awk '/python3? .*(run_leg|resume_update)\.py/ && !/awk/'
 ```
 
 `scripts/supervise_update.py` is kept only for reference. Do not start it.
+
+## Excel output shape
+
+Every export carries TEN sheets, and that is permanent:
+
+- the five buckets -- HOT, WARM, COLD, POTENTIAL_SHORT_SALE, UNCLASSIFIED
+- five HOT breakdown sheets, one per rule, titled from `HOT_RULES` in
+  `lead_ranking.py`: `A. Bankruptcy Reopened`, `B. EMAP-Loan Mod Failed`,
+  `C. Recent Lender Complaint`, `D. Assistance Window Closed`,
+  `E. Judgment + Non-Appearing`
+
+`hot_rule_for()` follows `decide_bucket`'s precedence, so each HOT case
+lands on exactly ONE breakdown sheet and the five sum to the HOT sheet --
+verify that when changing either. A case whose bucket is HOT but matches
+no rule (a window that aged out between updates) is omitted from the
+breakdown sheets but still appears on HOT, so no lead is ever lost; if
+that count is non-zero the buckets are stale and want a re-derivation.
 
 ## Lead classification rules
 

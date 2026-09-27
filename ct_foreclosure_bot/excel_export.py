@@ -13,6 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from .lead_ranking import HOT_RULES, hot_rule_for
 from .models import CaseResult
 
 NEW_ROW_FILL = PatternFill(start_color="FFC6EFCE", end_color="FFC6EFCE", fill_type="solid")  # green
@@ -147,40 +148,55 @@ def build_workbook(
 
     for bucket in SHEET_ORDER:
         rows = sorted(by_bucket.get(bucket, []), key=SORT_KEYS[bucket])
-        ws = wb.create_sheet(title=bucket)
+        _write_sheet(wb, bucket, rows, summary_col_idx, new_dockets, updated_dockets)
 
-        for col_idx, (header, _) in enumerate(COLUMNS, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
-            cell.font = Font(bold=True)
-
-        for row_idx, result in enumerate(rows, start=2):
-            row_fill = None
-            if result.docket_no in new_dockets:
-                row_fill = NEW_ROW_FILL
-            elif result.docket_no in updated_dockets:
-                row_fill = UPDATED_ROW_FILL
-
-            for col_idx, (_, getter) in enumerate(COLUMNS, start=1):
-                value = getter(result)
-                cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                if col_idx == summary_col_idx:
-                    cell.alignment = Alignment(wrap_text=True, vertical="top")
-                if row_fill is not None:
-                    cell.fill = row_fill
-            # Multi-line bullet text needs a taller row than the default,
-            # sized to how many bullets this case actually has -- a fixed
-            # height would either clip a HOT case with a long history or
-            # waste space on a case with only one or two bullets.
-            line_count = result.case_summary.count("\n") + 1 if result.case_summary else 1
-            ws.row_dimensions[row_idx].height = max(15, line_count * 15)
-
-        for col_idx in range(1, len(COLUMNS) + 1):
-            ws.column_dimensions[get_column_letter(col_idx)].width = (
-                60 if col_idx == summary_col_idx else 22
-            )
-        ws.freeze_panes = "A2"
+    # Per-rule breakdown of HOT. Each HOT case lands on exactly one of
+    # these -- hot_rule_for() follows decide_bucket's precedence -- so the
+    # five sheets sum to the HOT sheet. A case HOT by bucket that matches
+    # no rule (a window that aged out between updates) is left off these
+    # sheets but is still on the main HOT sheet, so nothing is lost.
+    hot_rows = by_bucket.get("HOT", [])
+    for code, title, _description in HOT_RULES:
+        subset = sorted([r for r in hot_rows if hot_rule_for(r) == code], key=_sort_key_hot)
+        _write_sheet(wb, title, subset, summary_col_idx, new_dockets, updated_dockets)
 
     return wb
+
+
+def _write_sheet(wb, title, rows, summary_col_idx, new_dockets, updated_dockets):
+    ws = wb.create_sheet(title=title)
+
+    for col_idx, (header, _) in enumerate(COLUMNS, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+
+    for row_idx, result in enumerate(rows, start=2):
+        row_fill = None
+        if result.docket_no in new_dockets:
+            row_fill = NEW_ROW_FILL
+        elif result.docket_no in updated_dockets:
+            row_fill = UPDATED_ROW_FILL
+
+        for col_idx, (_, getter) in enumerate(COLUMNS, start=1):
+            value = getter(result)
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            if col_idx == summary_col_idx:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            if row_fill is not None:
+                cell.fill = row_fill
+        # Multi-line bullet text needs a taller row than the default,
+        # sized to how many bullets this case actually has -- a fixed
+        # height would either clip a HOT case with a long history or
+        # waste space on a case with only one or two bullets.
+        line_count = result.case_summary.count("\n") + 1 if result.case_summary else 1
+        ws.row_dimensions[row_idx].height = max(15, line_count * 15)
+
+    for col_idx in range(1, len(COLUMNS) + 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = (
+            60 if col_idx == summary_col_idx else 22
+        )
+    ws.freeze_panes = "A2"
+    return ws
 
 
 def export_to_xlsx(

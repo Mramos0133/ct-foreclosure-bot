@@ -149,7 +149,17 @@ RECENT_COMPLAINT_MIN_FILED_DATE = date(2026, 7, 1)
 # to pencil; above SHORT_SALE_RATIO the case is deep enough underwater to
 # be worth working as a short sale instead. Both override the distress
 # buckets -- see equity_bucket_override().
-COLD_RATIO = 0.75
+#
+# COLD_RATIO raised 0.75 -> 0.85 on 2026-09-27 per explicit instruction.
+# Note the consequence: SHORT_SALE_RATIO is also 0.85 and is tested first,
+# so the equity-COLD band (> COLD_RATIO and <= SHORT_SALE_RATIO) is now
+# empty and equity alone never forces COLD. Anything past 85% becomes a
+# POTENTIAL_SHORT_SALE, and the 154 cases that sat between 75% and 85%
+# return to whatever their distress signals say -- 55 of them HOT, 24 WARM.
+# COLD remains reachable through the continuance rule; only the equity
+# path into it is closed. Raising SHORT_SALE_RATIO above 0.85 would reopen
+# a distinct COLD band between the two.
+COLD_RATIO = 0.85
 SHORT_SALE_RATIO = 0.85
 
 
@@ -455,3 +465,50 @@ def finalize_judgment_granted(ranking: RankingInfo, granted_from_order: bool) ->
 
 def finalize_bankruptcy_chapter(ranking: RankingInfo, chapter: str | None) -> None:
     ranking.bankruptcy_chapter = chapter
+
+
+# The five independent routes into HOT, in the order decide_bucket tests
+# them. Keyed by the short code used for the per-rule breakdown sheets in
+# excel_export.py; the title is what that sheet is named, so the workbook
+# cannot drift from the rule set.
+HOT_RULES = [
+    ("A", "A. Bankruptcy Reopened",
+     "Bankruptcy filed, then a motion restarted the foreclosure (filed 2-12 months ago)"),
+    ("B", "B. EMAP-Loan Mod Failed",
+     "EMAP or loan modification entered, then failed or lapsed (entered 1-12 months ago)"),
+    ("C", "C. Recent Lender Complaint",
+     "Lender filed the complaint recently and loan assistance is closed or absent"),
+    ("D", "D. Assistance Window Closed",
+     "Mediation or EMAP expired/terminated within the last 6 months"),
+    ("E", "E. Judgment + Non-Appearing",
+     "Judgment entered against a non-appearing defendant, not yet on the auction site"),
+]
+
+
+def hot_rule_for(r) -> str | None:
+    """Which HOT rule claimed this case, as a HOT_RULES code.
+
+    Mirrors decide_bucket's precedence exactly -- first match wins -- so a
+    case appears on one breakdown sheet, and the sheets sum to the HOT
+    total. Returns None for a case whose bucket is HOT but which no longer
+    satisfies any rule; that happens transiently when a window ages out
+    between one update and the next, and such a case still appears on the
+    main HOT sheet.
+
+    Takes anything with the stored flags (a CaseResult), not a RankingInfo,
+    because the export reads from the checkpoint.
+    """
+    if getattr(r, "lead_bucket", None) != "HOT":
+        return None
+    if getattr(r, "bankruptcy_reopen_hot", False):
+        return "A"
+    if getattr(r, "assistance_program_hot", False):
+        return "B"
+    if getattr(r, "recent_complaint_hot", False):
+        return "C"
+    if getattr(r, "assistance_elapsed_hot", False):
+        return "D"
+    key_past = r.days_to_key_date is not None and r.days_to_key_date < 0
+    if r.judgment_granted and r.non_appearing and not r.on_auction_site and not key_past:
+        return "E"
+    return None

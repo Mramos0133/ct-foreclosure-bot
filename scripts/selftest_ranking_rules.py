@@ -67,9 +67,19 @@ def main() -> int:
     check("equity override forces short sale despite judgment HOT",
           equity_bucket_override(no_equity) == "POTENTIAL_SHORT_SALE",
           str(equity_bucket_override(no_equity)))
+    # COLD_RATIO was raised to 0.85 to match SHORT_SALE_RATIO, which empties
+    # the equity-COLD band. 80% must now fall through to the distress bucket
+    # rather than being forced COLD -- that is the whole point of the change.
     thin = short_sale_ratio(320_000.0, 400_000.0, 0.0)               # 80%
-    check("equity override forces COLD in the 75-85% band",
-          equity_bucket_override(thin) == "COLD", str(equity_bucket_override(thin)))
+    check("80% no longer forced COLD (band emptied)",
+          equity_bucket_override(thin) is None, str(equity_bucket_override(thin)))
+    check("COLD_RATIO is not below SHORT_SALE_RATIO",
+          COLD_RATIO >= SHORT_SALE_RATIO,
+          f"COLD {COLD_RATIO} < SHORT_SALE {SHORT_SALE_RATIO} would resurrect the band silently")
+    just_over = short_sale_ratio(860_000.0, 1_000_000.0, 0.0)        # 86%
+    check("above 85% still forces short sale",
+          equity_bucket_override(just_over) == "POTENTIAL_SHORT_SALE",
+          str(equity_bucket_override(just_over)))
     good = short_sale_ratio(150_000.0, 300_000.0, None)              # 50%, the real case
     check("real equity does not force a bucket",
           equity_bucket_override(good) is None, str(equity_bucket_override(good)))
@@ -93,6 +103,17 @@ def main() -> int:
     # has to make the ratio unknown so no bucket is forced either way.
     cleared = short_sale_ratio(_plausible_debt(2.00), 470_000.0, None)
     check("cleared debt yields an unknown ratio, not 0%", cleared is None, str(cleared))
+
+    # --- HOT breakdown sheets must stay in step with the rule set
+    from ct_foreclosure_bot.lead_ranking import HOT_RULES
+    codes = [c for c, _t, _d in HOT_RULES]
+    check("five HOT rules defined", codes == ["A", "B", "C", "D", "E"], str(codes))
+    titles = [t for _c, t, _d in HOT_RULES]
+    check("sheet titles within Excel's 31-char limit",
+          all(len(t) <= 31 for t in titles),
+          str([t for t in titles if len(t) > 31]))
+    bad = [t for t in titles if any(ch in t for ch in r":\\/?*[]")]
+    check("sheet titles free of characters Excel rejects", not bad, str(bad))
 
     print(f"\n{len(FAILURES)} failure(s)" if FAILURES else "\nall ranking rules pass")
     return 1 if FAILURES else 0
