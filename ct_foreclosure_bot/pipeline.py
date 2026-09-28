@@ -291,6 +291,14 @@ async def process_case(
         complaint_unpaid_since=complaint_unpaid_since,
         recent_complaint_hot=ranking.recent_complaint_hot,
         recent_complaint_warm=ranking.recent_complaint_warm,
+        # Never persisted here at all until 2026-09-28, so a case scraped
+        # through this path carried the dataclass default of False even
+        # when decide_bucket had just set it True and put the case in HOT
+        # for exactly this reason. reclassify_from_docket was fixed a day
+        # earlier; this is the same omission in the primary path, which is
+        # why 16 cases came out of the following run HOT with the flag
+        # False and no breakdown sheet to sit on.
+        assistance_elapsed_hot=ranking.assistance_elapsed_hot,
         assistance_state=analysis.assistance_state,
         assistance_elapsed_date=(
             analysis.assistance_elapsed_date.isoformat()
