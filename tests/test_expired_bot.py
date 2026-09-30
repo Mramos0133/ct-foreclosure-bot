@@ -862,3 +862,64 @@ class TestAssessorSearchQuery(unittest.TestCase):
         """Bridgeport stores 'AV', Hamden 'AVE', the MLS says 'Avenue'."""
         self.assertTrue(addresses_match("575 BURNSFORD AV", "575 Burnsford Avenue"))
         self.assertTrue(addresses_match("75 WASHINGTON AVE", "75 Washington Avenue"))
+
+
+class TestContactEligibility(unittest.TestCase):
+    """Capturing a listing and being allowed to contact its seller are
+    different questions (handoff, 2026-09-29). Withdrawn sellers are
+    watch-list only -- the listing agreement is usually still in force.
+    """
+
+    def _lead(self, status):
+        from ct_expired_bot.models import AlertListing
+        return make_lead(
+            alert=AlertListing(mls_no="1", street_address="1 Main St",
+                               town="Stamford", zip_code="06902", status=status),
+            owner=OwnerRecord(owner_name="SMITH JOHN", mailing_address="1 Main St"),
+        )
+
+    def test_expired_may_be_contacted(self):
+        for status in ("expired", "expd"):
+            lead = self._lead(status)
+            self.assertTrue(lead.may_contact, status)
+            self.assertFalse(lead.needs_review, status)
+
+    def test_withdrawn_is_watchlist_never_contacted(self):
+        for status in ("withdrawn", "with", "wdrn"):
+            lead = self._lead(status)
+            self.assertFalse(lead.may_contact, status)
+            self.assertTrue(lead.needs_review, status)
+
+    def test_temporarily_off_market_is_watchlist(self):
+        for status in ("temporarily off market", "tom"):
+            self.assertFalse(self._lead(status).may_contact, status)
+
+    def test_canceled_is_held_for_phase_two(self):
+        from ct_expired_bot.models import DISPOSITION_PHASE2
+        for status in ("canceled", "cancelled", "canc"):
+            lead = self._lead(status)
+            self.assertEqual(lead.disposition, DISPOSITION_PHASE2, status)
+            self.assertFalse(lead.may_contact, status)
+
+    def test_unknown_status_defaults_to_watchlist_not_nurture(self):
+        """An unrecognised status is not evidence that contact is allowed."""
+        self.assertFalse(self._lead("some new code").may_contact)
+        self.assertFalse(self._lead("").may_contact)
+
+    def test_withdrawn_never_reaches_the_vendor_file(self):
+        import tempfile as _t
+        out = Path(_t.mkdtemp())
+        leads = [self._lead("expired"), self._lead("withdrawn"), self._lead("canceled")]
+        self.assertEqual(write_skiptrace_csv(out / "v.csv", leads), 1)
+        self.assertEqual(write_review_csv(out / "r.csv", leads), 2)
+        review = (out / "r.csv").read_text()
+        self.assertIn("do not contact", review)
+        self.assertIn("phase 2", review)
+
+    def test_watchlist_row_is_still_captured(self):
+        """The handoff wants withdrawn listings tracked so they can be
+        re-enrolled if they later expire -- held back, not discarded.
+        """
+        from ct_expired_bot.models import EXPIRED_STATUSES
+        for status in ("withdrawn", "canceled", "temporarily off market"):
+            self.assertIn(status, EXPIRED_STATUSES, status)

@@ -24,7 +24,7 @@ import csv
 import json
 from pathlib import Path
 
-from .models import NA, Lead
+from .models import DISPOSITION_PHASE2, DISPOSITION_WATCHLIST, NA, Lead
 from .names import split_owner_name
 
 # The values this bot can put in a vendor file, in their natural order.
@@ -138,6 +138,17 @@ def write_skiptrace_csv(
 
 def _review_reason(lead: Lead) -> str:
     reasons = []
+    if lead.disposition == DISPOSITION_WATCHLIST:
+        reasons.append(
+            f"Status '{lead.alert.status}' is WATCH LIST, not nurture -- the "
+            "listing agreement is usually still in force, so do not contact "
+            "this seller. Re-enrolls automatically if it later expires."
+        )
+    elif lead.disposition == DISPOSITION_PHASE2:
+        reasons.append(
+            f"Status '{lead.alert.status}' is held for phase 2 -- canceled "
+            "listings are not in the nurture pipeline yet."
+        )
     if getattr(lead.mls, "likely_rental", False):
         reasons.append(
             f"List price {lead.mls.list_price_final} looks like a monthly rent, "

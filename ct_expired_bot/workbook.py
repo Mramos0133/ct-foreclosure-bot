@@ -35,6 +35,8 @@ META_SHEET = "Meta"
 BOT_COLUMNS: list[tuple[str, object]] = [
     ("MLS #", lambda l: l.mls_no),
     ("Status", lambda l: l.alert.status.title() if l.alert.status else NA),
+    ("Disposition", lambda l: l.disposition),
+    ("May Contact", lambda l: "Yes" if l.may_contact else "No"),
     ("Street Address", lambda l: l.alert.street_address or NA),
     ("Town", lambda l: l.mls.town if l.mls.town != NA else (l.alert.town or NA)),
     ("Zip", lambda l: l.mls.zip_code if l.mls.zip_code != NA else (l.alert.zip_code or NA)),

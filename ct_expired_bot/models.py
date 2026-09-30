@@ -43,6 +43,51 @@ EXPIRED_STATUSES = {
     "temporarily off market", "temp off market", "tom",
 }
 
+# CAPTURING a listing and being allowed to CONTACT its seller are two
+# different questions, and conflating them is a compliance problem, not
+# a data-quality one. Per the 2026-09-29 handoff:
+#
+#   "Withdrawn listings are watch-list only: the listing agreement is
+#    usually still in force, so don't contact those sellers. Capture the
+#    original expiration date and re-enroll the listing if it later
+#    expires."
+#
+# So every status above is still captured and tracked -- that is how a
+# withdrawn listing gets re-enrolled once it genuinely expires -- but
+# only NURTURE_STATUSES may reach the skip trace vendor. Sending a
+# withdrawn seller to be traced and called while another agent's listing
+# agreement is live is exactly what the handoff rules out.
+DISPOSITION_NURTURE = "nurture"      # contact now
+DISPOSITION_WATCHLIST = "watchlist"  # track, never contact
+DISPOSITION_PHASE2 = "phase2"        # held pending a decision to expand
+
+NURTURE_STATUSES = {"expired", "expd"}
+# Canceled is "a possible second phase" in the handoff -- decided, but
+# not yet switched on, so it is held rather than silently contacted.
+PHASE2_STATUSES = {"canceled", "cancelled", "canc"}
+WATCHLIST_STATUSES = {
+    "withdrawn", "with", "wdrn",
+    "temporarily off market", "temp off market", "tom",
+}
+
+
+def disposition(status: str | None) -> str:
+    """What may be done with a listing in this status.
+
+    Anything unrecognised falls to the watch list rather than to
+    nurture: an unknown status is not evidence that contact is allowed.
+    """
+    key = (status or "").strip().lower()
+    if key in NURTURE_STATUSES:
+        return DISPOSITION_NURTURE
+    if key in PHASE2_STATUSES:
+        return DISPOSITION_PHASE2
+    return DISPOSITION_WATCHLIST
+
+
+def may_contact(status: str | None) -> bool:
+    return disposition(status) == DISPOSITION_NURTURE
+
 
 def parse_money(raw: str | None) -> float | None:
     """"$425,000" -> 425000.0; NA/blank/unparseable -> None (never 0.0).
@@ -200,8 +245,22 @@ class Lead:
         return self.alert.mls_no
 
     @property
+    def disposition(self) -> str:
+        """nurture / watchlist / phase2, from the listing status."""
+        return disposition(self.alert.status)
+
+    @property
+    def may_contact(self) -> bool:
+        """False for withdrawn (agreement still live) and canceled."""
+        return self.disposition == DISPOSITION_NURTURE
+
+    @property
     def needs_review(self) -> bool:
         """Rows that must never reach the vendor CSV (spec Step 5)."""
+        # Contact eligibility is checked FIRST: a withdrawn seller with a
+        # perfectly resolved owner name is still not someone to call.
+        if not self.may_contact:
+            return True
         if self.owner.status in (NEEDS_MANUAL_REVIEW, PORTAL_UNAVAILABLE):
             return True
         # A rental priced as a sale would ship a nonsense lead to the
