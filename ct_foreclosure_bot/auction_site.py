@@ -31,6 +31,16 @@ BASE_URL = "https://sso.eservices.jud.ct.gov/foreclosures/Public"
 INDEX_URL = f"{BASE_URL}/PendPostbyTownList.aspx?Caller=Public"
 
 
+class AuctionListingError(RuntimeError):
+    """The listing fetched but did not parse into anything usable.
+
+    Distinct from a network failure: the request succeeded, so a caller
+    cannot tell something is wrong from the response alone. Raised rather
+    than returning {} because an empty listing is indistinguishable from
+    "no property in Connecticut is posted for sale", which callers act on.
+    """
+
+
 def normalize_docket(docket_no: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", docket_no.upper())
 
@@ -65,11 +75,35 @@ def _parse_sale_date(raw: str) -> date | None:
         return None
 
 
+def _find_sales_table(soup):
+    """The sale table, located without depending on its exact element id.
+
+    It was once id="ctl00_cphBody_GridView1"; by 2026-10-16 the site had
+    dropped the ASP.NET "ctl00_" prefix and served id="cphBody_GridView1".
+    An exact-id lookup matched nothing and the parser returned {} for every
+    town, so the statewide listing read as zero pending sales -- which left
+    on_auction_site False on cases that were in fact already posted for
+    sale, over-firing HOT rule E. Matching on the id suffix survives that
+    rename, and the header-text fallback survives the id changing again.
+    """
+    table = soup.find("table", id=re.compile(r"cphBody_GridView1$"))
+    if table is not None:
+        return table
+    for candidate in soup.find_all("table"):
+        header = candidate.find("tr")
+        if header is None:
+            continue
+        labels = {c.get_text(strip=True).lower() for c in header.find_all(["td", "th"])}
+        if "sale date" in labels and "docket number" in labels:
+            return candidate
+    return None
+
+
 def _parse_town_detail(detail_html: str) -> dict[str, date]:
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(detail_html, "html.parser")
-    table = soup.find(id="ctl00_cphBody_GridView1")
+    table = _find_sales_table(soup)
     if table is None:
         return {}
 
@@ -97,10 +131,26 @@ async def fetch_statewide_auction_listing(
     """
     index_html = await _fetch(context, throttle, INDEX_URL)
     town_links = _parse_town_links(index_html)
+    if not town_links:
+        raise AuctionListingError(
+            f"index page parsed to zero town links ({len(index_html)} bytes) -- "
+            "the listing page's markup has changed"
+        )
 
     listing: dict[str, date] = {}
     for href in town_links:
         detail_url = f"{BASE_URL}/{href.strip()}"
         detail_html = await _fetch(context, throttle, detail_url)
         listing.update(_parse_town_detail(detail_html))
+
+    # The index only lists towns that HAVE a pending sale, so towns>0 with
+    # sales==0 is never a real statewide answer -- it is the detail parser
+    # failing to find the table. Raise instead of handing back {}, which
+    # callers would otherwise treat as "nothing is posted for sale" and
+    # clear on_auction_site across the board.
+    if not listing:
+        raise AuctionListingError(
+            f"{len(town_links)} towns listed but zero sales parsed -- "
+            "the detail table's markup has changed"
+        )
     return listing

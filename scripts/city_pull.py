@@ -34,12 +34,13 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ct_foreclosure_bot.excel_export import export_to_xlsx
+from ct_foreclosure_bot.lead_ranking import days_until
 from ct_foreclosure_bot.models import CaseResult
 
 
@@ -70,15 +71,6 @@ def load_results(db_path: str, towns: set[str]) -> list[CaseResult]:
         return out
     finally:
         con.close()
-
-
-def days_until(iso: str | None, today: date) -> int | None:
-    if not iso:
-        return None
-    try:
-        return (datetime.strptime(iso, "%Y-%m-%d").date() - today).days
-    except ValueError:
-        return None
 
 
 def main():

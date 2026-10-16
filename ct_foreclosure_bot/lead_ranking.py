@@ -416,13 +416,23 @@ def decide_bucket(ranking: RankingInfo, bankruptcy_stay_reopened: bool, today: d
     elif (
         ranking.judgment_granted
         and ranking.non_appearing
-        and not ranking.on_auction_site
         and not key_date_in_past
     ):
+        # The "not yet on the auction site" condition was dropped on
+        # 2026-10-16 per explicit instruction. It was there to catch the
+        # pre-listing window, but it also threw away the most urgent cases
+        # in the book: when the auction cross-reference was repaired that
+        # day, 51 HOT cases turned out to be posted for sale with a future
+        # date -- judgment entered, defendant never appeared, auction now
+        # scheduled -- and every one of them fell out of the rule. A posted
+        # sale shortens the window; it does not close it. key_date_in_past
+        # still excludes sales that have already happened, which is the
+        # condition that actually ends the opportunity.
+        #
         # Checked BEFORE the continuance demotion below, reversed on
         # 2026-09-27. A judgment entered against a non-appearing defendant
-        # on a case not yet public on the auction site is the cleanest lead
-        # this bot produces, and continuance-first buried it: statewide, 47
+        # is the cleanest lead this bot produces, and continuance-first
+        # buried it: statewide, 47
         # COLD cases were COLD on continuance count alone and 20 of those
         # met every condition of this rule. The example that surfaced it,
         # HHD-CV-25-6203191-S, had judgment granted, a non-appearing
@@ -454,6 +464,23 @@ def finalize_key_date(ranking: RankingInfo, key_date: date | None, label: str | 
     ranking.days_to_key_date = (key_date - today).days if key_date else None
 
 
+def days_until(iso: str | None, today: date) -> int | None:
+    """Days from `today` to an ISO date string, or None if it is absent/unparseable.
+
+    The stored days_to_key_date is whatever finalize_key_date computed on
+    the day the case was scraped, so by export time it can be weeks stale:
+    a sale that already happened reads as "1 day out". Every consumer that
+    shows the number to a human recomputes it through here rather than
+    trusting the stored field.
+    """
+    if not iso:
+        return None
+    try:
+        return (date.fromisoformat(iso) - today).days
+    except (TypeError, ValueError):
+        return None
+
+
 def finalize_judgment_granted(ranking: RankingInfo, granted_from_order: bool) -> None:
     # The Order document's own text is authoritative when available --
     # trust it outright rather than only OR-ing it with the weaker
@@ -481,7 +508,7 @@ HOT_RULES = [
     ("D", "D. Assistance Window Closed",
      "Mediation or EMAP expired/terminated within the last 6 months"),
     ("E", "E. Judgment + Non-Appearing",
-     "Judgment entered against a non-appearing defendant, not yet on the auction site"),
+     "Judgment entered against a non-appearing defendant, sale not yet held"),
 ]
 
 
@@ -508,7 +535,10 @@ def hot_rule_for(r) -> str | None:
         return "C"
     if getattr(r, "assistance_elapsed_hot", False):
         return "D"
+    # Mirrors decide_bucket's rule E, including the 2026-10-16 removal of
+    # the "not on the auction site" condition -- keep the two in step or
+    # the breakdown sheets stop summing to HOT.
     key_past = r.days_to_key_date is not None and r.days_to_key_date < 0
-    if r.judgment_granted and r.non_appearing and not r.on_auction_site and not key_past:
+    if r.judgment_granted and r.non_appearing and not key_past:
         return "E"
     return None

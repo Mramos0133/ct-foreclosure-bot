@@ -104,6 +104,37 @@ def main() -> int:
     cleared = short_sale_ratio(_plausible_debt(2.00), 470_000.0, None)
     check("cleared debt yields an unknown ratio, not 0%", cleared is None, str(cleared))
 
+    # --- rule E and hot_rule_for must agree, or the breakdown stops
+    # summing to HOT. On 2026-10-16 the "not on the auction site"
+    # condition was dropped from decide_bucket; if it comes back in one
+    # place and not the other, 51 posted-for-sale cases silently fall off
+    # the breakdown sheets while staying on HOT.
+    e_tail = src.split("elif bankruptcy_stay_reopened:", 1)[-1]
+    e_clause = e_tail[:e_tail.find("ranking.continuance_count >= 2")]
+    check("decide_bucket rule E does not gate on on_auction_site",
+          "on_auction_site" not in e_clause,
+          "the auction condition is back in decide_bucket")
+    hr = src.split("def hot_rule_for", 1)[-1]
+    check("hot_rule_for rule E does not gate on on_auction_site",
+          "on_auction_site" not in hr,
+          "the auction condition is back in hot_rule_for")
+
+    # --- the auction listing must never parse to silence. An exact-id
+    # lookup broke when the site dropped its "ctl00_" prefix, and the
+    # parser returned {} for every town: the statewide listing read as
+    # zero pending sales, leaving on_auction_site False on 173 cases that
+    # were in fact posted.
+    from ct_foreclosure_bot.auction_site import _parse_town_detail
+    row = ('<tr><td>1</td><td>10/31/202612:00PM</td><td>DBDCV266058391S</td>'
+           '<td>PUBLIC AUCTION</td><td>x</td></tr>')
+    head = '<tr><th>#</th><th>Sale Date</th><th>Docket Number</th><th>Type</th><th>View</th></tr>'
+    for ident, label in [('cphBody_GridView1', "current id"),
+                         ('ctl00_cphBody_GridView1', "legacy ctl00_ id"),
+                         ('renamedAgain', "id renamed again (header fallback)")]:
+        html = f'<table id="{ident}">{head}{row}</table>'
+        check(f"auction detail parses: {label}", len(_parse_town_detail(html)) == 1,
+              f"{len(_parse_town_detail(html))} rows parsed, wanted 1")
+
     # --- HOT breakdown sheets must stay in step with the rule set
     from ct_foreclosure_bot.lead_ranking import HOT_RULES
     codes = [c for c, _t, _d in HOT_RULES]
