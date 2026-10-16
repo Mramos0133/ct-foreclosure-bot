@@ -57,13 +57,46 @@ Two staleness fixes the script applies, worth knowing about:
 
 - `days_to_key_date` is frozen at scrape time in the checkpoint, so a row
   can claim "8 days" on a sale that already happened. The script always
-  recomputes it against today.
+  recomputes it against today, through `lead_ranking.days_until` --
+  `export_final.py` uses the same helper, so the master sheet and a city
+  pull can no longer disagree about what day it is.
 - A stored `key_date` comes from the Order document at scrape time and is
   often missing for a case that was posted for sale later. Re-read the
   auction site and pass the fresh dates via `--live-auction`
   ({docket_no: "YYYY-MM-DD"} JSON) whenever the list is for real outreach
   -- on the last pull this filled in three sale dates that showed as
   blank, two of which were only days away.
+
+## Refreshing sale dates from the auction site
+
+The checkpoint's `key_date` and `on_auction_site` are only ever as good as
+the last docket read, so before any list that drives real outreach:
+
+```
+CT_BOT_CHROMIUM_PATH=/opt/pw-browsers/chromium \
+  python3 scripts/fetch_live_sales.py --output /tmp/live_sales.json
+python3 scripts/apply_live_auction.py --live-auction /tmp/live_sales.json --dry-run
+python3 scripts/apply_live_auction.py --live-auction /tmp/live_sales.json
+```
+
+`fetch_live_sales.py` reads the listing (~90 throttled requests),
+`apply_live_auction.py` persists it. On 2026-10-16 that corrected 173
+cases: 87 sale dates the sheet had blank, 20 it had wrong, and 173
+`on_auction_site` flags reading False on properties that were posted.
+`export_final.py --live-auction` applies the same JSON at export time
+without touching the checkpoint, if you only want it in one workbook.
+
+**The listing parser failed silently for an unknown stretch before that.**
+`auction_site` looked the grid up by the exact id `ctl00_cphBody_GridView1`;
+the site dropped the ASP.NET prefix, the lookup matched nothing, and
+`_parse_town_detail` returned `{}` for all 90 towns. Nothing errored --
+the statewide listing simply read as zero pending sales, which is
+indistinguishable from "no property in CT is for sale". It now matches on
+the id suffix, falls back to finding the table by its "Sale Date" /
+"Docket Number" header, and `fetch_statewide_auction_listing` raises
+`AuctionListingError` when towns are listed but no sales parse. Never
+reintroduce a code path where an empty listing is returned rather than
+raised: callers treat `{}` as fact and clear `on_auction_site` wholesale.
 
 ## Standard operating procedure for every data pull
 
@@ -210,6 +243,22 @@ verify that when changing either. A case whose bucket is HOT but matches
 no rule (a window that aged out between updates) is omitted from the
 breakdown sheets but still appears on HOT, so no lead is ever lost; if
 that count is non-zero the buckets are stale and want a re-derivation.
+
+That check earned its keep on 2026-10-16: repairing the auction
+cross-reference dropped 64 cases off the breakdown while leaving them on
+HOT, and the two causes needed opposite treatment -- 51 were posted for
+sale with a future date (rule E widened to keep them, below) and 13 had
+already been sold (retired via `apply_rule_fixes.py`). Run
+`apply_rule_fixes.py` when the total does not reconcile; it retires a HOT
+case whose sale has actually been held, which is decidable from persisted
+fields alone because rule E is the only HOT rule with no flag of its own.
+
+Rule E no longer excludes cases already on the auction site (changed
+2026-10-16 per explicit instruction). A posted sale shortens the window
+rather than closing it, and the old condition discarded the most urgent
+cases in the book. `key_date_in_past` is what ends the rule now. Both
+`decide_bucket` and `hot_rule_for` must agree on this or the breakdown
+total silently breaks -- `selftest_ranking_rules.py` asserts it.
 
 ## Lead classification rules
 
