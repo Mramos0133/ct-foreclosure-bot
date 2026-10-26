@@ -11,6 +11,7 @@ mutation. Safe to run before kicking off any long job.
 
   python3 scripts/selftest_ops.py
 """
+import re
 import subprocess
 import sqlite3
 import sys
@@ -25,6 +26,17 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{(' -- ' + detail) if detail and not ok else ''}")
     if not ok:
         FAILURES.append(name)
+
+
+def warn(name: str, ok: bool, detail: str = "") -> None:
+    """Report a condition without failing the run.
+
+    For environment quirks that mislead the next person but do not stop
+    the work: the imports above already prove the packages are present
+    for THIS interpreter, so a `pip` pointing elsewhere is a trap to
+    document, not a reason to refuse to scrape.
+    """
+    print(f"  {'PASS' if ok else 'WARN'}  {name}{(' -- ' + detail) if detail and not ok else ''}")
 
 
 def main() -> int:
@@ -80,12 +92,43 @@ def main() -> int:
     #    pip packages or the tesseract binary, and the failure is silent
     #    from outside: the supervisor just logs legs that make no progress.
     import importlib, shutil
-    for mod in ("playwright", "bs4", "openpyxl", "pymupdf", "pytesseract", "PIL"):
+    # Import the submodule that actually pulls in the compiled extension,
+    # not just the top-level package. A stale Pillow built for another
+    # Python version satisfies `import PIL` and then raises on
+    # `from PIL import Image`, so checking the package alone reported a
+    # confident PASS for a Pillow that could not decode anything
+    # (2026-10-26). Same shape of risk for pymupdf and playwright.
+    for mod, probe in (
+        ("playwright", "playwright.sync_api"),
+        ("bs4", "bs4"),
+        ("openpyxl", "openpyxl.workbook"),
+        ("pymupdf", "pymupdf"),
+        ("pytesseract", "pytesseract"),
+        ("PIL", "PIL.Image"),
+    ):
         try:
-            importlib.import_module(mod)
+            importlib.import_module(probe)
             check(f"python dep: {mod}", True)
-        except ImportError as exc:
-            check(f"python dep: {mod}", False, f"{exc} -- pip install -r requirements.txt")
+        except Exception as exc:
+            check(f"python dep: {mod}", False,
+                  f"{type(exc).__name__}: {exc} -- python3 -m pip install -r requirements.txt "
+                  "(bare `pip` may target a different interpreter)")
+
+    # The interpreter running this must be the one the packages landed in.
+    # In a rebuilt container `pip` is 3.13's while `python3` is 3.11, so a
+    # clean-looking install leaves every import failing.
+    import sys as _sys
+    pip_py = shutil.which("pip")
+    if pip_py:
+        import subprocess as _sp
+        out = _sp.run([pip_py, "--version"], capture_output=True, text=True).stdout
+        m = re.search(r"\(python (\d+\.\d+)\)", out)
+        ours = f"{_sys.version_info.major}.{_sys.version_info.minor}"
+        warn("bare `pip` targets this interpreter",
+             m is None or m.group(1) == ours,
+             f"pip is for python {m.group(1) if m else '?'} but this is {ours} -- "
+             "always use `python3 -m pip`, a bare `pip install` will appear to "
+             "succeed and install nothing this interpreter can import")
     check("tesseract binary on PATH", shutil.which("tesseract") is not None,
           "apt-get install -y tesseract-ocr -- OCR silently fails without it")
     check("chromium present", Path("/opt/pw-browsers/chromium").exists(),

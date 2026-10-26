@@ -189,9 +189,27 @@ binary, and that failure is silent from outside -- legs just make no
 progress. The self-test catches it; when it flags missing deps:
 
 ```
-pip install -r requirements.txt
-apt-get install -y tesseract-ocr
+python3 -m pip install -r requirements.txt   # NOT bare `pip`, see below
+apt-get update -qq && apt-get install -y tesseract-ocr
 ```
+
+Three traps in that, all hit on 2026-10-26:
+
+- **Use `python3 -m pip`, never bare `pip`.** In the rebuilt container
+  `pip` is Python 3.13's (`/usr/bin/pip`) while `python3` is 3.11
+  (`/usr/local/bin/python3`). A bare `pip install` reports success and
+  puts everything in 3.13's dist-packages, where the interpreter that
+  runs this project cannot see it -- so the self-test still fails with
+  `ModuleNotFoundError` right after an apparently clean install.
+- `apt-get install tesseract-ocr` fails with "Unable to locate package"
+  until `apt-get update` has run.
+- Pillow needs `python3 -m pip install --force-reinstall Pillow` on top.
+  A stale 3.13 copy at `/usr/lib/python3/dist-packages/PIL` shadows it,
+  and that copy's compiled `_imaging` will not load under 3.11:
+  `import PIL` succeeds while `from PIL import Image` raises. The ops
+  self-test's dep check only does the former, so it reports PASS for a
+  Pillow that cannot actually decode an image -- `selftest_ranking_rules.py`
+  is what surfaces it.
 
 Supporting pieces:
 
