@@ -81,9 +81,9 @@ def main() -> int:
     print(f"  sale date was wrong, now corrected:    {len(moved)}")
     print(f"  on_auction_site was False, now True:   {len(flagged)}")
     print(f"\nHOT rule E cases among these:            {len(rule_e)}")
-    print("  (rule E means 'judgment entered, NOT yet publicly listed' -- these")
-    print("   ARE listed, so the rule fired on a stale input. Buckets left alone;")
-    print("   the next --update re-derives them with the corrected flag.)")
+    print("  (rule E stopped excluding listed cases on 2026-10-16, so a posted")
+    print("   sale no longer unseats them -- they stay HOT and the corrected")
+    print("   Key Date carries the urgency. Only a sale already held ends it.)")
 
     imminent = sorted(
         [(days_until(s, today), r) for r, s in touched if days_until(s, today) is not None],
