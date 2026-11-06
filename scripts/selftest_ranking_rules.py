@@ -119,6 +119,24 @@ def main() -> int:
           "on_auction_site" not in hr,
           "the auction condition is back in hot_rule_for")
 
+    # --- apply_rule_fixes' promote and retire rules must read the same
+    # clock. meets_judgment_hot() once read the frozen days_to_key_date
+    # while sale_already_held() read key_date against today, so a case
+    # whose sale had passed but whose stored count still said "+8 days"
+    # was promoted COLD -> HOT and demoted straight back on every run
+    # (three cases ping-ponged on 2026-11-06). Both must derive from
+    # key_date, or apply_rule_fixes never reaches a fixed point.
+    fx = (Path(__file__).resolve().parent / "apply_rule_fixes.py").read_text()
+    mjh = fx.split("def meets_judgment_hot", 1)[-1].split("\ndef ", 1)[0]
+    # Matches the attribute access, not the word: the docstring explains
+    # the trap by name and must not trip its own guard.
+    check("apply_rule_fixes promote rule does not read frozen days_to_key_date",
+          "r.days_to_key_date" not in mjh,
+          "meets_judgment_hot reads the stale stored count again")
+    check("apply_rule_fixes promote rule shares the retire rule's clock",
+          "sale_already_held" in mjh,
+          "meets_judgment_hot no longer derives its date from key_date")
+
     # --- the auction listing must never parse to silence. An exact-id
     # lookup broke when the site dropped its "ctl00_" prefix, and the
     # parser returned {} for every town: the statewide listing read as

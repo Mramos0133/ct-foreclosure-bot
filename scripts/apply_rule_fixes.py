@@ -143,14 +143,24 @@ def bucket_after_sale(r: CaseResult, debt) -> str:
     return "COLD" if (r.continuance_count or 0) >= 2 else "UNCLASSIFIED"
 
 
-def meets_judgment_hot(r: CaseResult) -> bool:
+def meets_judgment_hot(r: CaseResult, today: date) -> bool:
     """HOT rule E, evaluated purely from persisted fields.
 
     Kept in step with decide_bucket, which dropped the "not on the auction
     site" condition on 2026-10-16 -- a posted sale shortens the window
     rather than closing it, and only a sale that already happened ends it.
+
+    Takes `today` and recomputes the day count from key_date, rather than
+    reading the stored days_to_key_date. That stored value is frozen at
+    scrape time, and reading it here put this function permanently at odds
+    with sale_already_held(), which has always used the real date: on
+    2026-11-06 three cases (Ledyard 14 Carriage Trail, Bridgeport 2445
+    Park Ave, Bristol 44 Coventry Rd) were promoted COLD -> HOT by this
+    rule on a frozen "+8 days" and demoted straight back by that one on
+    the true date, so repeated runs ping-ponged them forever. Both ends
+    now read the same clock.
     """
-    key_past = r.days_to_key_date is not None and r.days_to_key_date < 0
+    key_past = sale_already_held(r, today)
     return bool(r.judgment_granted and r.non_appearing and not key_past)
 
 
@@ -184,7 +194,7 @@ def main() -> int:
         effective_debt = _plausible_debt(r.total_debt)
         if (
             r.lead_bucket == "COLD"
-            and meets_judgment_hot(r)
+            and meets_judgment_hot(r, today)
             and (r.continuance_count or 0) >= 2
             and equity_forces(r, effective_debt) is None
         ):
