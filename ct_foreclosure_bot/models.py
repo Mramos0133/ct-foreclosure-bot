@@ -77,6 +77,17 @@ class CaseResult:
     key_date: str | None = None  # Law Day or Sale Date, ISO format, from the Order document
     key_date_label: str | None = None  # "Law Day" | "Sale Date" | None
     days_to_key_date: int | None = None
+    # Judgment shape / redemption / title / last activity -- see judgment.py.
+    # Requested 2026-11-13 and carried on every pull from then on. All of
+    # these come from material already fetched, so they cost no extra
+    # requests. title_vested_status is an inference from docket dates, NOT
+    # a title search -- read judgment.py's docstring before relying on it.
+    judgment_type: str | None = None  # "Strict Foreclosure" | "Foreclosure by Sale" | None
+    judgment_date: str | None = None  # ISO, file date of the Order entry
+    current_law_day: str | None = None  # ISO, strict foreclosures only
+    title_vested_status: str = ""
+    last_material_event: str = ""  # short label, see judgment.MATERIAL_EVENTS
+    last_material_event_date: str | None = None  # ISO
     bankruptcy_chapter: str | None = None  # "7" | "13" | etc., WARM/HOT-via-bankruptcy cases only
     bankruptcy_filed_date: str | None = None  # ISO format, date of the first bankruptcy-mention docket entry
     bankruptcy_reopen_hot: bool = False  # bankruptcy filed, then reopened/restarted, within the 2-12 month HOT window -- see lead_ranking.py

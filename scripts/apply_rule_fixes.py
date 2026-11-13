@@ -31,6 +31,7 @@ conclusively:
   python3 scripts/apply_rule_fixes.py
 """
 import argparse
+import dataclasses
 import json
 import sqlite3
 import sys
@@ -41,8 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ct_foreclosure_bot.checkpoint import Checkpoint
 from ct_foreclosure_bot.lead_ranking import (
-    equity_bucket_override, is_assistance_elapsed_hot, is_bankruptcy_reopen_hot,
-    short_sale_ratio,
+    days_until, equity_bucket_override, hot_rule_for, is_assistance_elapsed_hot,
+    is_bankruptcy_reopen_hot, short_sale_ratio,
 )
 from ct_foreclosure_bot.models import CaseResult
 from ct_foreclosure_bot.worksheet import MIN_PLAUSIBLE_DEBT, _plausible_debt
@@ -131,6 +132,27 @@ def stale_hot_after_sale(r: CaseResult, today: date) -> bool:
     )
 
 
+def hot_without_a_rule(r: CaseResult, today: date) -> bool:
+    """A HOT case that matches none of the five HOT rules.
+
+    stale_hot_after_sale() only reaches cases with a sale date, so a case
+    whose supporting flag was corrected to False and which never had a
+    key date falls through every retire path and sits in HOT forever,
+    keeping the breakdown sheets from summing. Three cases were in that
+    state on 2026-11-13 -- no judgment, no key date, every flag false.
+
+    Safe to decide offline for the same reason the post-sale rule is:
+    hot_rule_for() reads only persisted fields, so "matches nothing" is a
+    fact about the record, not a guess about the docket. The case is not
+    discarded -- it moves to COLD or UNCLASSIFIED and the next full
+    update re-derives it from the docket, which is authoritative.
+    """
+    if r.lead_bucket != "HOT":
+        return False
+    fresh = dataclasses.replace(r, days_to_key_date=days_until(r.key_date, today))
+    return hot_rule_for(fresh) is None
+
+
 def bucket_after_sale(r: CaseResult, debt) -> str:
     """Where decide_bucket's tail sends a case once rule E stops matching.
 
@@ -179,7 +201,7 @@ def main() -> int:
         if fixes:
             flag_fixes.append((r, fixes))
 
-        if stale_hot_after_sale(r, today):
+        if stale_hot_after_sale(r, today) or hot_without_a_rule(r, today):
             expired.append((r, bucket_after_sale(r, _plausible_debt(r.total_debt))))
 
         bad_debt = r.total_debt is not None and _plausible_debt(r.total_debt) is None
@@ -205,7 +227,7 @@ def main() -> int:
     print(f"stale HOT flags corrected:                    {len(flag_fixes)}"
           f"  (assistance_elapsed {ef}, bankruptcy_reopen {bf})")
     print(f"promotions COLD -> HOT (reordering):           {len(promoted)}")
-    print(f"HOT cases whose sale has already been held:   {len(expired)}")
+    print(f"HOT cases retired (sale held, or matching no rule): {len(expired)}")
     if expired:
         for r, dest in sorted(expired, key=lambda x: x[0].key_date or ""):
             print(f"       sale {r.key_date}  {r.town:<15} "

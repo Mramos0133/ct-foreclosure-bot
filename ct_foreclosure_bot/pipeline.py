@@ -35,6 +35,10 @@ from .motions import is_extend_sale_date_or_law_day, is_granted
 from .order_document import (
     fetch_document_text, extract_key_date, extract_bankruptcy_chapter, is_order_granted,
 )
+from .judgment import (
+    current_law_day, extract_judgment_type, judgment_date_from_entry,
+    last_material_event, title_vested_status,
+)
 from .output import ResultWriter, ReviewWriter
 from .search import iter_town_cases
 from .throttle import Throttle
@@ -148,6 +152,10 @@ async def process_case(
     # bankruptcy motion) when there's actually a date/chapter to find --
     # these are additional network requests per case, so skip them when
     # classify_case() already determined there's no relevant order entry.
+    # Hoisted out of the try so the judgment-shape columns below can read
+    # it; stays None when there is no Order entry or the fetch failed,
+    # and extract_judgment_type() then falls back to the date label.
+    order_text: str | None = None
     if ranking.order_entry_for_key_date is not None:
         try:
             order_text = await fetch_document_text(
@@ -243,6 +251,15 @@ async def process_case(
     if ranking.recent_complaint_hot:
         motion_types_display.append("Recent Lender Complaint")
 
+    # Judgment shape / redemption / title / last activity (see judgment.py).
+    # All derived from material already in hand -- the Order text OCR'd
+    # above and the docket entries -- so no extra requests.
+    key_date_iso = ranking.key_date.isoformat() if ranking.key_date else None
+    judgment_type = extract_judgment_type(
+        order_text, ranking.key_date_label, analysis.motion_types_found
+    )
+    last_event, last_event_date = last_material_event(docket.entries)
+
     result = CaseResult(
         town=town,
         street_address=street_address,
@@ -270,9 +287,17 @@ async def process_case(
         judgment_granted=ranking.judgment_granted,
         non_appearing=ranking.non_appearing,
         on_auction_site=ranking.on_auction_site,
-        key_date=ranking.key_date.isoformat() if ranking.key_date else None,
+        key_date=key_date_iso,
         key_date_label=ranking.key_date_label,
         days_to_key_date=ranking.days_to_key_date,
+        judgment_type=judgment_type,
+        judgment_date=judgment_date_from_entry(ranking.order_entry_for_key_date),
+        current_law_day=current_law_day(key_date_iso, judgment_type),
+        title_vested_status=title_vested_status(
+            judgment_type, key_date_iso, today, last_event_date
+        ),
+        last_material_event=last_event,
+        last_material_event_date=last_event_date,
         bankruptcy_chapter=ranking.bankruptcy_chapter,
         bankruptcy_filed_date=ranking.bankruptcy_filed_date.isoformat() if ranking.bankruptcy_filed_date else None,
         bankruptcy_reopen_hot=ranking.bankruptcy_reopen_hot,

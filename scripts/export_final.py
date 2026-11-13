@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ct_foreclosure_bot.checkpoint import Checkpoint
 from ct_foreclosure_bot.excel_export import export_to_xlsx
+from ct_foreclosure_bot.judgment import title_vested_status
 from ct_foreclosure_bot.lead_ranking import days_until
 from ct_foreclosure_bot.models import CaseResult
 from ct_foreclosure_bot.update_run import _meaningfully_different
@@ -100,6 +101,7 @@ def main() -> int:
                 filled += 1
 
     corrected = past = 0
+    retitled = 0
     for r in current:
         fresh_days = days_until(r.key_date, today)
         if fresh_days != r.days_to_key_date:
@@ -107,6 +109,16 @@ def main() -> int:
         r.days_to_key_date = fresh_days
         if fresh_days is not None and fresh_days < 0:
             past += 1
+        # Title status reads today's clock -- a Law Day passes and the
+        # answer changes with no docket event at all -- so it is recomputed
+        # here for the same reason the day count is. Stored, it would say
+        # "redemption period running" on a deadline that lapsed weeks ago.
+        fresh_title = title_vested_status(
+            r.judgment_type, r.key_date, today, r.last_material_event_date
+        )
+        if fresh_title != r.title_vested_status:
+            retitled += 1
+        r.title_vested_status = fresh_title
 
     counts = export_to_xlsx(current, str(REPO / args.output),
                             new_dockets=new_dockets, updated_dockets=updated_dockets)
@@ -119,6 +131,7 @@ def main() -> int:
     if args.live_auction:
         print(f"sale dates refreshed from auction site: {filled}")
     print(f"days_to_key_date corrected against {today}: {corrected}")
+    print(f"title_vested_status recomputed against {today}: {retitled}")
     print(f"  ...of which the date has already passed: {past}")
 
     # Bucket split of just the new leads -- that is the part a caller acts on first.

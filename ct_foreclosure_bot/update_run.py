@@ -33,6 +33,9 @@ from .case_analysis import analyze_docket
 from .case_summary import build_case_summary
 from .checkpoint import Checkpoint
 from .docket import fetch_docket
+from .judgment import (
+    current_law_day, extract_judgment_type, last_material_event, title_vested_status,
+)
 from .lead_ranking import (
     RankingInfo, decide_bucket, equity_bucket_override, short_sale_ratio,
 )
@@ -60,6 +63,14 @@ MEANINGFUL_FIELDS = (
     "recent_complaint_hot", "complaint_principal_amount", "complaint_unpaid_since",
     "recent_complaint_warm", "assistance_state", "assistance_elapsed_date",
     "probate_case", "estate_of", "heirs", "assistance_elapsed_hot",
+    # A new judgment, a moved Law Day, or a fresh docket event is exactly
+    # the kind of change worth a second look, so all four turn a row
+    # yellow. title_vested_status is deliberately NOT here: it is derived
+    # from today's date, so it flips on its own as a Law Day passes and
+    # would repaint hundreds of rows every week for no docket reason --
+    # the same cosmetic churn days_to_key_date is excluded for.
+    "judgment_type", "judgment_date", "current_law_day",
+    "last_material_event", "last_material_event_date",
 )
 
 
@@ -75,8 +86,29 @@ def _fields_differ(old_value, new_value) -> bool:
     return old_value != new_value
 
 
+# Fields that only started being computed partway through the dataset's
+# life. On the first export after one is added, EVERY case reads as
+# changed -- not because anything happened, but because the column did
+# not exist in the baseline. Going from empty to populated on these is
+# backfill, so it is not news; a change from one real value to a
+# different one still is. Adding the judgment columns on 2026-11-13
+# would otherwise have turned 2279 of 2945 rows yellow and drowned the
+# 906 that reflected actual docket activity.
+BACKFILLED_FIELDS = frozenset({
+    "judgment_type", "judgment_date", "current_law_day",
+    "last_material_event", "last_material_event_date",
+})
+
+
 def _meaningfully_different(old: CaseResult, new: CaseResult) -> bool:
-    return any(_fields_differ(getattr(old, f), getattr(new, f)) for f in MEANINGFUL_FIELDS)
+    for f in MEANINGFUL_FIELDS:
+        old_value, new_value = getattr(old, f), getattr(new, f)
+        if not _fields_differ(old_value, new_value):
+            continue
+        if f in BACKFILLED_FIELDS and not old_value:
+            continue  # first time this column was ever computed
+        return True
+    return False
 
 
 def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> CaseResult:
@@ -155,6 +187,11 @@ def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> C
         today=today,
     )
 
+    judgment_type = old_result.judgment_type or extract_judgment_type(
+        None, old_result.key_date_label, old_result.motion_types_found
+    )
+    last_event, last_event_date = last_material_event(docket.entries)
+
     return dataclasses.replace(
         old_result,
         lead_bucket=ranking.lead_bucket,
@@ -196,6 +233,22 @@ def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> C
         lender_plaintiff=analysis.lender_plaintiff,
         case_summary=case_summary,
         docket_entry_count=len(docket.entries),
+        # Judgment shape / redemption / title / last activity (judgment.py).
+        # The Order document is NOT refetched here, so judgment_type falls
+        # back to the stored value or the stored date label, and
+        # judgment_date is left as it was -- a case whose docket has not
+        # grown cannot have a new judgment. The other three ARE recomputed:
+        # the docket entries are in hand, so the last material event is
+        # free and current, and title_vested_status reads today's clock, so
+        # leaving it stored would make it drift exactly the way
+        # days_to_key_date did before it was recomputed at export.
+        judgment_type=judgment_type,
+        current_law_day=current_law_day(old_result.key_date, judgment_type),
+        title_vested_status=title_vested_status(
+            judgment_type, old_result.key_date, today, last_event_date
+        ),
+        last_material_event=last_event,
+        last_material_event_date=last_event_date,
     )
 
 

@@ -245,6 +245,61 @@ ps -eo pid,etime,args | awk '/python3? .*(run_leg|resume_update)\.py/ && !/awk/'
 
 `scripts/supervise_update.py` is kept only for reference. Do not start it.
 
+## Judgment / law day / title columns (PERMANENT, added 2026-11-13)
+
+Six columns requested on 2026-11-13 and carried on **every** pull from
+then on -- statewide updates and city pulls alike, since both route
+through `export_to_xlsx()`. Do not drop them from `COLUMNS`:
+
+| Column | Source |
+|---|---|
+| Judgment Type | Order text, else key date label, else the motion moved on |
+| Judgment Date | file date of the Order docket entry |
+| Current Law Day | `key_date` on strict foreclosures only |
+| Title Vested Status | derived from type + key date + today |
+| Last Material Court Event | most recent material docket entry |
+| Last Material Event Date | its file date |
+
+All of it comes from material the pipeline already fetches, so the
+columns cost **no extra requests per case**. Logic and the full caveats
+live in `ct_foreclosure_bot/judgment.py`; `scripts/selftest_judgment.py`
+guards them and runs inside `selftest_ops.py`.
+
+**Title Vested Status is an inference from docket dates, not a title
+search.** It reads "the Law Day on record has passed" and says so. It
+cannot see a redemption that happened or a Law Day reset the docket has
+not yet shown, so a case with activity recorded AFTER its Law Day is
+reported as *likely reset*, not vested, and a passed Sale Date is
+reported as *title passes on confirmation, verify* rather than as a lost
+owner. Confirm on the land records before writing an owner off.
+
+Judgment Type reads the motion as a third source for a reason: statewide,
+1898 cases carry a strict-foreclosure motion while only 11 ever yielded a
+"Law Day" date label, because that line is frequently not extracted from
+the Order. Deriving from the date label alone reported Connecticut as
+overwhelmingly foreclosure-by-sale, which is backwards.
+
+Both paths persist these -- `pipeline.py` for a fresh scrape and
+`update_run.py` for a recheck. Keep it that way; a field written on one
+path only is the exact shape of the `assistance_elapsed_hot` bug.
+`title_vested_status` is additionally recomputed in `export_final.py`,
+because like `days_to_key_date` it reads today's clock and would
+otherwise claim a redemption period was running on a deadline that
+lapsed weeks ago.
+
+`update_run.MEANINGFUL_FIELDS` carries the four factual ones so a new
+judgment or a moved Law Day turns a row yellow, but **not**
+`title_vested_status`, which changes on its own as dates pass.
+`BACKFILLED_FIELDS` then suppresses the empty-to-populated transition:
+without it, adding these columns turned 2279 of 2945 rows yellow and
+buried the 906 that reflected real docket activity.
+
+`scripts/backfill_judgment.py` fills Judgment Type / Current Law Day /
+Title Vested on existing cases with no network. Judgment Date and Last
+Material Event CANNOT be derived offline -- raw docket entries are not
+persisted -- so they stay blank until the next full update reads the
+dockets. Blank is the honest state there.
+
 ## Excel output shape
 
 Every export carries TEN sheets, and that is permanent:
@@ -270,6 +325,16 @@ already been sold (retired via `apply_rule_fixes.py`). Run
 `apply_rule_fixes.py` when the total does not reconcile; it retires a HOT
 case whose sale has actually been held, which is decidable from persisted
 fields alone because rule E is the only HOT rule with no flag of its own.
+It also retires a HOT case matching NO rule at all (`hot_without_a_rule`,
+added 2026-11-13): the post-sale rule only reaches cases with a sale
+date, so a case whose flag was corrected to False and which never had a
+key date sat in HOT permanently and kept the breakdown from summing.
+
+**Run `apply_rule_fixes.py` until it reports zero changes, not once.**
+Correcting a stale flag can expose a case to the retire rule, so a first
+pass of 10 flag corrections + 7 retirements was followed by a second
+finding 2 more. It converges in two or three passes; a single pass can
+leave the breakdown short.
 
 Rule E no longer excludes cases already on the auction site (changed
 2026-10-16 per explicit instruction). A posted sale shortens the window

@@ -161,6 +161,14 @@ def main() -> int:
     failing = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("FAIL")]
     check("bucket priority and debt floor", r.returncode == 0, "; ".join(failing)[:200])
 
+    # 10. Judgment type / law day / title status / last court event. Title
+    #     status is the one that tells a caller to stop pursuing an owner,
+    #     so its hedged cases are pinned rather than left to drift.
+    r = subprocess.run([sys.executable, str(REPO / "scripts" / "selftest_judgment.py")],
+                       capture_output=True, text=True, timeout=120)
+    failing = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("FAIL")]
+    check("judgment / law day / title columns", r.returncode == 0, "; ".join(failing)[:200])
+
     print(f"\n{len(FAILURES)} failure(s)" if FAILURES else "\nall checks passed")
     return 1 if FAILURES else 0
 

@@ -53,6 +53,15 @@ COLUMNS = [
     ("Estate Of (deceased owner)", lambda r: r.estate_of),
     ("Heirs / Fiduciary to Contact", lambda r: r.heirs),
     ("Judgment Granted (Y/N)", lambda r: "Y" if r.judgment_granted else "N"),
+    # Requested 2026-11-13, permanent on every pull -- see judgment.py.
+    # Placed next to Judgment Granted and ahead of Key Date because they
+    # are what tells you which deadline Key Date actually is.
+    ("Judgment Type", lambda r: r.judgment_type or ""),
+    ("Judgment Date", lambda r: r.judgment_date or ""),
+    ("Current Law Day", lambda r: r.current_law_day or ""),
+    ("Title Vested Status", lambda r: r.title_vested_status),
+    ("Last Material Court Event", lambda r: r.last_material_event),
+    ("Last Material Event Date", lambda r: r.last_material_event_date or ""),
     ("Non-Appearing (Y/N)", lambda r: "Y" if r.non_appearing else "N"),
     ("Key Date", lambda r: r.key_date or ""),
     ("Key Date Type", lambda r: r.key_date_label or ""),
