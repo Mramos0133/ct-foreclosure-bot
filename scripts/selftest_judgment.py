@@ -119,6 +119,89 @@ def main() -> int:
           == ("", None))
     check("empty docket -> empty", last_material_event([]) == ("", None))
 
+    # --- key-date extraction, against VERBATIM lines from real Orders
+    #
+    # Every string below was read off an actual filing on 2026-11-13 via
+    # scripts/sample_order_text.py; the docket number is given so the
+    # evidence is traceable rather than taken on trust. The first four
+    # were silently unmatched before the connector list was widened,
+    # which is what left Current Law Day populated on 11 of 2945 cases.
+    from ct_foreclosure_bot.order_document import extract_key_date, is_order_granted
+    real_orders = [
+        ("WWM-CV-24-6031107-S",
+         "LAW DAY SET FOR Monday, November 16, 2026, for the owner of the equity of "
+         "redemption, and\nsubsequent days for subsequent encumbrancers",
+         date(2026, 11, 16), "Law Day"),
+        ("FST-CV-23-6060335-S",
+         "LAW DAY SET FOR Tuesday, December 01, 2026, for the owner of the equity",
+         date(2026, 12, 1), "Law Day"),
+        ("HHD-CV-25-6213476-S",
+         "The clerk will set the new Sale Date to 1/23/2027. The Committee is instructed "
+         "to incur no additional\nfees and costs prior to 12/9/26.",
+         date(2027, 1, 23), "Sale Date"),
+        ("HHD-CV-25-6214629-S",
+         "The clerk will set the new Sale Date of March 6, 2027. The Committee is "
+         "instructed to incur no\nadditional fees and costs prior to 01/20/26.",
+         date(2027, 3, 6), "Sale Date"),
+        ("UWY-CV-25-6088378-S",
+         "A new sale date of 8/29/2026 is ordered. The sale shall be conducted",
+         date(2026, 8, 29), "Sale Date"),
+        # These already worked; pinned so widening never breaks them.
+        ("HHD-CV-25-6204270-S",
+         "Title Fee: $225.00\nLaw Day: 10/13/2026, for the owner of equity of redemption",
+         date(2026, 10, 13), "Law Day"),
+        ("HHD-CV-25-6208063-S",
+         "Law Day: 01/05/26, for the owner of equity of redemption",
+         date(2026, 1, 5), "Law Day"),
+        ("HHD-CV-26-6217313-S",
+         "Per the oral record the Law Day is 08/17/26, for the owner of equity",
+         date(2026, 8, 17), "Law Day"),
+        ("HHD-CV-18-6102185-S",
+         "MOTION TO OPEN JUDGMENT AND EXTEND THE SALE DATE IS GRANTED.\n"
+         "Sale Date: SATURDAY, 10/28/2023 @ Noon",
+         date(2023, 10, 28), "Sale Date"),
+        ("HHD-CV-25-6210279-S",
+         "ORDER REGARDING:\n07/27/2026 138.00 MOTION TO RESET LAW DAYS AFTER FILING OF A "
+         "BANKRUPTCY\nPETITION (CGS 49-15)\nNew Sale Date: Saturday, 01/09/2027 at 12:00 noon",
+         date(2027, 1, 9), "Sale Date"),
+    ]
+    for docket_no, text, want_date, want_label in real_orders:
+        got_date, got_label = extract_key_date(text)
+        check(f"real order {docket_no} -> {want_label} {want_date}",
+              (got_date, got_label) == (want_date, want_label),
+              f"got {(got_date, got_label)}")
+
+    # The tight gap is the whole safety property: an unrelated date later
+    # in the sentence must NOT be read as the key date. This is the
+    # committee-fee deadline from HHD-CV-24-6184277-S's real Order.
+    fee_trap = ("The clerk will set the new Sale Date of February 27, 2027. The Committee "
+                "is instructed to incur no\nadditional fees and costs prior to 01/13/27. "
+                "A new appraisal is required for the new sale date, but the\nrequirement")
+    check("the operative date wins over a later fee deadline",
+          extract_key_date(fee_trap) == (date(2027, 2, 27), "Sale Date"),
+          f"got {extract_key_date(fee_trap)}")
+    check("a 'RESET LAW DAYS' motion heading alone yields no Law Day",
+          extract_key_date("MOTION TO RESET LAW DAYS AFTER FILING OF A BANKRUPTCY\n"
+                           "PETITION (CGS 49-15) filed 07/27/2026") == (None, None))
+    check("a dateless order stays blank rather than guessing",
+          extract_key_date("ORDER REGARDING:\n07/02/2026 123.00 MOTION TO OPEN JUDGMENT\n"
+                           "ORDER: GRANTED") == (None, None))
+
+    # --- the explicit disposition line outranks the word "granted"
+    off_order = ("ORDER REGARDING:\n01/06/2026 111.00 MOTION FOR JUDGMENT-STRICT FORECLOSURE\n"
+                 "The foregoing, having been considered by the Court, is hereby:\n"
+                 "ORDER: OFF\nPetition to participate in mediation granted by the Court.")
+    check("DBD-CV-25-6056466-S 'ORDER: OFF' is not a granted judgment",
+          is_order_granted(off_order) is False)
+    check("'ORDER: GRANTED' is granted",
+          is_order_granted("The foregoing is hereby:\nORDER: GRANTED\nDisposition: JOGSF") is True)
+    check("'ORDER: DENIED' is not granted",
+          is_order_granted("ORDER: DENIED\nThe motion is denied.") is False)
+    check("granted judgment with no disposition line still reads as granted",
+          is_order_granted("MOTION FOR STRICT FORECLOSURE IS GRANTED\nLaw Day: 10/13/2026") is True)
+    check("'hereby entered' template still reads as granted",
+          is_order_granted("Judgment of Foreclosure by Sale is hereby entered as follows:") is True)
+
     # --- the export carries all five columns
     from ct_foreclosure_bot.excel_export import COLUMNS
     headers = [h for h, _ in COLUMNS]

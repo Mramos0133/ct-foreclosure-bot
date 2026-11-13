@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS summary_backfilled (
     docket_no      TEXT PRIMARY KEY,
     backfilled_at  TEXT NOT NULL
 );
+
+-- Tracks which cases have had their Order document re-read for a key
+-- date under the widened patterns (scripts/backfill_law_day.py, added
+-- 2026-11-13). Needed as its own marker because a normal --update will
+-- NOT re-read the Order of a case whose docket has not grown
+-- (update_run.recheck_matched_case short-circuits on entry count), so
+-- the fix would otherwise never reach a quiet case. Per-case so an
+-- interruption costs one case, not the pass.
+CREATE TABLE IF NOT EXISTS law_day_backfilled (
+    docket_no      TEXT PRIMARY KEY,
+    backfilled_at  TEXT NOT NULL
+);
 """
 
 
@@ -204,6 +216,23 @@ class Checkpoint:
                 (docket_no, _now()),
             )
         self._conn.commit()
+
+    def is_law_day_backfilled(self, docket_no: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM law_day_backfilled WHERE docket_no = ?", (docket_no,)
+        )
+        return cur.fetchone() is not None
+
+    def mark_law_day_backfilled(self, docket_no: str) -> None:
+        with closing(self._conn.cursor()) as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO law_day_backfilled (docket_no, backfilled_at) VALUES (?, ?)",
+                (docket_no, _now()),
+            )
+        self._conn.commit()
+
+    def law_day_backfill_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM law_day_backfilled").fetchone()[0]
 
     def summary_backfill_stats(self) -> dict:
         total = self._conn.execute("SELECT COUNT(*) FROM case_results").fetchone()[0]

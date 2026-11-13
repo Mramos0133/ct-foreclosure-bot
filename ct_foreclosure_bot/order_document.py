@@ -36,15 +36,52 @@ from .worksheet import fetch_worksheet_pdf, render_first_page
 
 import pytesseract
 
-# Two Order-document templates confirmed on real filings, each with
-# different date phrasing: "Law Day:2/4/2019" (numeric, no space) vs. "The
-# Sale Date is: Saturday, April 25, 2026" (spelled-out month, with a
-# weekday name in between the label and the date). _DATE_ANY matches
-# either a numeric M/D/YYYY date or a "Month D, YYYY" one.
+# _DATE_ANY matches either a numeric M/D/YYYY date or a "Month D, YYYY"
+# one. Both appear, sometimes in the same court's orders.
 _DATE_ANY = r"(\d{1,2}/\d{1,2}/\d{2,4}|[A-Za-z]+\s+\d{1,2},?\s+\d{4})"
+
+# A weekday name frequently sits between the label and the date, with or
+# without its comma ("SET FOR Monday, November 16, 2026", "Sale Date:
+# SATURDAY, 10/28/2023").
+_WEEKDAY = r"(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day"
+
+# The words courts put between the label and the date. Sampled from 24
+# real Orders on 2026-11-13 (scripts/sample_order_text.py), which is the
+# evidence this list rests on rather than a guess -- every string below
+# was read off an actual filing:
+#
+#   "LAW DAY SET FOR Monday, November 16, 2026, for the owner of..."
+#   "Law Day: 10/13/2026, for the owner of equity of redemption..."
+#   "Per the oral record the Law Day is 08/17/26, for the owner..."
+#   "The clerk will set the new Sale Date to 1/23/2027."
+#   "The clerk will set the new Sale Date of March 6, 2027."
+#   "A new sale date of 8/29/2026 is ordered."
+#   "New Sale Date: Saturday, 01/09/2027 at 12:00 noon"
+#
+# Only the first three of those matched before this list existed: the old
+# pattern allowed a bare colon, an "is", and at most ONE comma-terminated
+# word, so every "SET FOR" / "to" / "of" phrasing fell through silently.
+# That is why Current Law Day was populated on 11 of 2945 cases while
+# 1898 carried a strict-foreclosure motion.
+#
+# DELIBERATELY TIGHT. The connector must sit immediately between the
+# label and the date, separated by nothing but whitespace and commas, so
+# the match cannot wander across a sentence into an unrelated date. Real
+# orders make that a live risk -- one reads "...set the new Sale Date of
+# February 27, 2027. The Committee is instructed to incur no additional
+# fees and costs prior to 01/13/27. A new appraisal is required for the
+# new sale date, but..." -- where a loose gap would happily read the
+# committee's fee deadline as the auction. Widen this list if a real
+# filing demands it; do not widen the gap itself.
+_CONNECTOR = (
+    r"(?::|\bis\b|\bare\b|\bset\s+for\b|\bset\s+to\b|\bto\b|\bof\b|\bon\b"
+    r"|\bwill\s+be\b|\bshall\s+be\b)"
+)
+_LEAD_IN = rf"\s*(?:{_CONNECTOR})?\s*,?\s*(?:{_WEEKDAY}\s*,?\s*)?"
+
 KEY_DATE_PATTERNS = [
-    ("Law Day", re.compile(rf"Law\s*Day\s*(?:is)?\s*:?\s*(?:\w+,\s*)?{_DATE_ANY}", re.I)),
-    ("Sale Date", re.compile(rf"Sale\s*Date\s*(?:is)?\s*:?\s*(?:\w+,\s*)?{_DATE_ANY}", re.I)),
+    ("Law Day", re.compile(rf"Law\s*Days?{_LEAD_IN}{_DATE_ANY}", re.I)),
+    ("Sale Date", re.compile(rf"Sale\s*Dates?{_LEAD_IN}{_DATE_ANY}", re.I)),
 ]
 
 BANKRUPTCY_CHAPTER_PATTERN = re.compile(r"Chapter\s+(7|11|12|13)\b", re.I)
@@ -128,6 +165,18 @@ DENIED_PATTERN = re.compile(r"\bDENIED\b", re.I)
 GRANTED_PATTERN = re.compile(r"\bGRANTED\b", re.I)
 HEREBY_ENTERED_PATTERN = re.compile(r"HEREBY\s+ENTERED", re.I)
 
+# The court's own one-word disposition, on its own line, immediately
+# after the "having been heard by the Court, is hereby:" boilerplate --
+# e.g. "ORDER: GRANTED", "ORDER: OFF", "ORDER: DENIED". This is the
+# structured field the clerk fills, so it outranks any scan for the word
+# "granted" in the Order's prose.
+DISPOSITION_PATTERN = re.compile(
+    r"^\s*ORDER\s*:\s*([A-Z][A-Z /]{1,30})\s*$", re.I | re.M)
+# Dispositions that are NOT a ruling in the plaintiff's favour. "OFF"
+# means the motion came off the short calendar without being decided.
+NOT_GRANTED_DISPOSITIONS = re.compile(
+    r"\b(OFF|DENIED|WITHDRAWN|MOOT|DISMISSED|STRICKEN|DEFERRED|TAKEN\s+PAPERS)\b", re.I)
+
 
 def is_order_granted(text: str) -> bool:
     """Whether an Order document reflects a granted (not denied) judgment.
@@ -137,12 +186,35 @@ def is_order_granted(text: str) -> bool:
     "MOTION FOR STRICT FORECLOSURE IS GRANTED"; another says only
     "ORDER:" followed directly by "Judgment of Foreclosure by Sale is
     hereby entered as follows: ..." with no literal "GRANTED" anywhere.
-    Checking for "DENIED" first (which does appear literally when a
-    motion is denied) avoids a false positive from the word "GRANTED"
-    appearing in some unrelated context; the presence of a key date
-    (Law Day / Sale Date) is also treated as evidence of a granted
-    judgment, since a denial order has no reason to state one.
+    The presence of a key date (Law Day / Sale Date) is also treated as
+    evidence of a granted judgment, since a denial order has no reason to
+    state one.
+
+    The explicit disposition line is read FIRST, because scanning the
+    prose for "granted" misreads a real template. On DBD-CV-25-6056466-S
+    the Order says:
+
+        ORDER: OFF
+        Petition to participate in mediation granted by the Court.
+
+    The strict-foreclosure motion was taken OFF the calendar and the
+    owner sent to mediation -- the opposite of a judgment -- yet the word
+    "granted" in the next sentence recorded the case as judgment_granted.
+    That feeds HOT rule E (judgment + non-appearing), so the false
+    positive does not sit quietly in a column; it manufactures a lead.
+    Checking DENIED before GRANTED was already doing a weaker version of
+    this; the disposition line does it properly.
     """
+    m = DISPOSITION_PATTERN.search(text)
+    if m:
+        disposition = m.group(1)
+        if NOT_GRANTED_DISPOSITIONS.search(disposition):
+            return False
+        if GRANTED_PATTERN.search(disposition):
+            return True
+        # Any other disposition word falls through to the prose scan
+        # below rather than being guessed at in either direction.
+
     if DENIED_PATTERN.search(text):
         return False
     if GRANTED_PATTERN.search(text) or HEREBY_ENTERED_PATTERN.search(text):
