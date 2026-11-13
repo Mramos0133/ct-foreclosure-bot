@@ -191,8 +191,14 @@ async def run(args) -> int:
         print(f"  order genuinely states none   : {blank}")
         print(f"  judgment_granted corrected    : {flag_flips}")
         print(f"  fetch/OCR failed (retryable)  : {failed}")
-        remaining = len(cases) - cp.law_day_backfill_count()
-        print(f"  still to read                 : {max(remaining, 0)}")
+        # Recount against the live checkpoint rather than subtracting the
+        # marker total from the starting scope: a recovered date removes
+        # that case from scope, so the subtraction goes negative and
+        # reports "0 still to read" while retryable failures are in fact
+        # still outstanding.
+        remaining = sum(1 for r in targets(db, args.all)
+                        if not cp.is_law_day_backfilled(r.docket_no))
+        print(f"  still to read (incl. retries) : {remaining}")
         if args.dry_run:
             print("\ndry run -- nothing written")
         return 0 if remaining <= 0 else 2
