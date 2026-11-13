@@ -300,6 +300,66 @@ Material Event CANNOT be derived offline -- raw docket entries are not
 persisted -- so they stay blank until the next full update reads the
 dockets. Blank is the honest state there.
 
+### Key dates come out of the Order PDF, and the phrasing varies (2026-11-13)
+
+`KEY_DATE_PATTERNS` in `order_document.py` carries an explicit list of
+the words courts put between the label and the date. Every entry was
+read off a real filing via `scripts/sample_order_text.py`, which dumps
+an Order's OCR text for a list of docket numbers. Sample before widening
+it again -- the first version of these patterns was a reasonable guess
+and it missed most of the book:
+
+    LAW DAY SET FOR Monday, November 16, 2026, for the owner...
+    The clerk will set the new Sale Date of March 6, 2027.
+    A new sale date of 8/29/2026 is ordered.
+
+It allowed a bare colon, an "is", and one comma-terminated word, so
+every "SET FOR" / "to" / "of" phrasing fell through **silently** and
+Current Law Day sat at 11 of 2945 cases. On the 20-Order sample the
+widened list takes extraction from 5 to 13.
+
+**Keep the gap tight -- whitespace and commas only.** One real Order
+states the sale date and then the committee's fee deadline twenty words
+later ("...Sale Date of February 27, 2027. ... incur no additional fees
+and costs prior to 01/13/27"); a loose gap reads the fee deadline as the
+auction. `selftest_judgment.py` pins that case and nine more by docket
+number.
+
+`scripts/backfill_law_day.py` applies the fix to cases already on
+record. **It has to exist as its own pass**: `recheck_matched_case`
+short-circuits on docket entry count and never re-reads the Order of a
+case whose docket has not grown, so a quiet case keeps its blank Law Day
+through any number of `--update` runs. Strictly additive -- only cases
+with no `key_date` are touched, so a stored date is never overwritten.
+Resumable per case (`law_day_backfilled`) and `--budget`-bounded like
+`run_leg.py`; about 4.5s and two requests per case.
+
+On the first run it read all 270 cases that had a judgment but no date:
+68 dates recovered, **172 Orders genuinely state no date** (they rule on
+a motion to open, refer the owner to mediation, or grant a caseflow
+request) and 30 have no Order entry at all. Together with the 915
+strict-foreclosure cases where no judgment has been granted yet, that is
+why Current Law Day reads 42 and not four figures. 42 is the real number.
+
+Two known gaps left deliberately, both needing more requests per case:
+
+- An Order sometimes delegates: "ORDER: GRANTED / See Order #133.50".
+  The date is in that other document and is not followed.
+- When the latest matched motion is still pending (no Order entry), the
+  *prior* judgment's date is still operative but is not read. Note the
+  converse is NOT safe: when the latest Order exists and simply states
+  no date, falling back to an older date would resurrect a deadline a
+  granted motion to open has just vacated. Blank is correct there.
+
+`is_order_granted()` reads the court's explicit `ORDER: <disposition>`
+line before scanning the prose. DBD-CV-25-6056466-S says `ORDER: OFF`
+followed by "Petition to participate in mediation granted by the
+Court." -- the motion came off the calendar and the owner went to
+mediation, the opposite of a judgment, but the stray "granted" recorded
+it as `judgment_granted`. That feeds HOT rule E, so it manufactures a
+lead rather than just mis-filling a column; the backfill corrected 16
+such cases and `apply_rule_fixes` then retired 22 HOT leads.
+
 ## Excel output shape
 
 Every export carries TEN sheets, and that is permanent:
