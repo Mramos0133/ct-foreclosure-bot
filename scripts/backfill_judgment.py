@@ -62,9 +62,15 @@ def main() -> int:
     changed = []
     types, titles = Counter(), Counter()
     for r in records:
-        jt = r.judgment_type or extract_judgment_type(
-            None, r.key_date_label, r.motion_types_found)
-        law_day = current_law_day(r.key_date, jt)
+        # A stored type is kept only when there is no date label to beat
+        # it. The label is the strongest source (see extract_judgment_type)
+        # and it is persisted, so re-deriving from it offline corrects a
+        # type that was mis-sourced from the Order's echoed motion caption
+        # -- 31 cases on the 2026-11-15 run read "Strict Foreclosure" on a
+        # Sale Date. Falling back to `or` would preserve exactly those.
+        from_label = extract_judgment_type(None, r.key_date_label, r.motion_types_found)
+        jt = from_label if r.key_date_label else (r.judgment_type or from_label)
+        law_day = current_law_day(r.key_date, jt, r.key_date_label)
         title = title_vested_status(jt, r.key_date, today, r.last_material_event_date)
         if (jt, law_day, title) != (r.judgment_type, r.current_law_day, r.title_vested_status):
             changed.append((r, jt, law_day, title))

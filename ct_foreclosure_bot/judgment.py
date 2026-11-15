@@ -107,12 +107,29 @@ def extract_judgment_type(
 
     Three sources, strongest first:
 
-      1. the Order's own wording, when it states the judgment form;
-      2. the date label the Order carried -- a Law Day is only ever set
+      1. the date label the Order carried -- a Law Day is only ever set
          by a strict foreclosure and a Sale Date only by a sale, so this
          names the judgment that is actually operative;
+      2. the Order's own wording, when it states the judgment form;
       3. the motion moved on, which covers the many cases where no date
          was extracted from the Order at all.
+
+    The label is read BEFORE the Order's wording, which is the reverse of
+    this function's first version. The reasoning then was that explicit
+    text beats a date label; the flaw is that an Order echoes the motion
+    it rules on in its own header --
+
+        ORDER REGARDING:
+        07/27/2026 138.00 MOTION FOR JUDGMENT-STRICT FORECLOSURE
+
+    -- so JUDGMENT_TYPE_PATTERNS matched "STRICT FORECLOSURE" on cases
+    whose operative date was a Sale Date, usually because the judgment
+    was converted or a later order extended an auction. That put 31 cases
+    on the 2026-11-15 run into Strict Foreclosure with a Sale Date, and
+    current_law_day() then printed the AUCTION date in the Current Law
+    Day column -- a redemption deadline that does not exist, in the one
+    column that is read as a deadline. The extracted date line is the
+    court's actual disposition; the header is just the caption.
 
     A case carrying BOTH motion types has usually been converted from one
     form to the other, and with no date label there is nothing to say
@@ -120,13 +137,13 @@ def extract_judgment_type(
     one. An empty cell reads as "not established"; a wrong one reads as
     fact and would send someone to the wrong deadline.
     """
+    from_label = LABEL_TO_TYPE.get(key_date_label or "")
+    if from_label:
+        return from_label
     if order_text:
         for label, pattern in JUDGMENT_TYPE_PATTERNS:
             if pattern.search(order_text):
                 return label
-    from_label = LABEL_TO_TYPE.get(key_date_label or "")
-    if from_label:
-        return from_label
     from_motions = {MOTION_TO_TYPE[m] for m in (motion_types or []) if m in MOTION_TO_TYPE}
     return from_motions.pop() if len(from_motions) == 1 else None
 
@@ -144,13 +161,28 @@ def judgment_date_from_entry(order_entry: DocketEntry | None) -> str | None:
     return d.isoformat() if d else None
 
 
-def current_law_day(key_date: str | None, judgment_type: str | None) -> str | None:
+def current_law_day(
+    key_date: str | None,
+    judgment_type: str | None,
+    key_date_label: str | None = None,
+) -> str | None:
     """The controlling redemption deadline, on strict foreclosures only.
 
     A Sale Date is not a Law Day and does not belong in this column; the
     sale is already carried by Key Date.
+
+    `key_date_label` is a second, independent gate on exactly that. The
+    judgment-type gate alone is not enough: any route that gets the type
+    wrong -- a mis-sourced type, a conversion, a date filled in from the
+    auction listing rather than the Order -- silently publishes an
+    auction date as a redemption deadline. Whatever the type says, a date
+    the Order labelled a Sale Date is never a Law Day, so it is refused
+    here too. This column is read as a deadline to act on, so it fails
+    closed.
     """
     if judgment_type != "Strict Foreclosure":
+        return None
+    if key_date_label and key_date_label != "Law Day":
         return None
     d = _parse(key_date)
     return d.isoformat() if d else None

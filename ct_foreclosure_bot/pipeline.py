@@ -292,7 +292,7 @@ async def process_case(
         days_to_key_date=ranking.days_to_key_date,
         judgment_type=judgment_type,
         judgment_date=judgment_date_from_entry(ranking.order_entry_for_key_date),
-        current_law_day=current_law_day(key_date_iso, judgment_type),
+        current_law_day=current_law_day(key_date_iso, judgment_type, ranking.key_date_label),
         title_vested_status=title_vested_status(
             judgment_type, key_date_iso, today, last_event_date
         ),

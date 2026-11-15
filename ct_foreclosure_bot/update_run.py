@@ -243,7 +243,8 @@ def reclassify_from_docket(old_result: CaseResult, docket, analysis, today) -> C
         # leaving it stored would make it drift exactly the way
         # days_to_key_date did before it was recomputed at export.
         judgment_type=judgment_type,
-        current_law_day=current_law_day(old_result.key_date, judgment_type),
+        current_law_day=current_law_day(
+            old_result.key_date, judgment_type, old_result.key_date_label),
         title_vested_status=title_vested_status(
             judgment_type, old_result.key_date, today, last_event_date
         ),

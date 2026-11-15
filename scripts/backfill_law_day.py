@@ -117,7 +117,7 @@ async def read_one(context, throttle, r: CaseResult, today: date):
         judgment_granted=granted,
         judgment_type=judgment_type,
         judgment_date=judgment_date_from_entry(order),
-        current_law_day=current_law_day(iso, judgment_type),
+        current_law_day=current_law_day(iso, judgment_type, label),
         last_material_event=event,
         last_material_event_date=event_date,
         title_vested_status=title_vested_status(judgment_type, iso, today, event_date),

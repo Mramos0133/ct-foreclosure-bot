@@ -119,6 +119,33 @@ def main() -> int:
           == ("", None))
     check("empty docket -> empty", last_material_event([]) == ("", None))
 
+    # --- an auction date must NEVER reach the Current Law Day column
+    #
+    # HHD-CV-25-6202898-S and 30 others on the 2026-11-15 run had their
+    # Sale Date printed as a Law Day: the Order echoes the motion it
+    # rules on in its header ("ORDER REGARDING: ... MOTION FOR
+    # JUDGMENT-STRICT FORECLOSURE"), so the Order-text scan called the
+    # case a strict foreclosure although the operative date it set was a
+    # sale. Both gates are pinned, because either one alone has let this
+    # through: the type source, and the column's own label check.
+    check("the date label outranks the motion caption echoed in the Order header",
+          extract_judgment_type(
+              "ORDER REGARDING:\n07/27/2026 138.00 MOTION FOR JUDGMENT-STRICT FORECLOSURE\n"
+              "ORDER: GRANTED\nNew Sale Date: Saturday, 01/09/2027",
+              "Sale Date", ["Motion for Judgment of Strict Foreclosure"],
+          ) == "Foreclosure by Sale",
+          f"got {extract_judgment_type(chr(10).join(['MOTION FOR JUDGMENT-STRICT FORECLOSURE']), 'Sale Date', None)!r}")
+    check("a Sale Date is refused by the Law Day column even if the type says strict",
+          current_law_day("2026-08-22", "Strict Foreclosure", "Sale Date") is None,
+          str(current_law_day("2026-08-22", "Strict Foreclosure", "Sale Date")))
+    check("a Law Day label passes the column gate",
+          current_law_day("2026-12-01", "Strict Foreclosure", "Law Day") == "2026-12-01")
+    check("an unlabelled date still passes when the type says strict",
+          current_law_day("2026-12-01", "Strict Foreclosure", None) == "2026-12-01")
+    check("an Order that names its judgment form is still read when there is no label",
+          extract_judgment_type("Judgment of Strict Foreclosure is hereby entered as follows:",
+                                None, None) == "Strict Foreclosure")
+
     # --- key-date extraction, against VERBATIM lines from real Orders
     #
     # Every string below was read off an actual filing on 2026-11-13 via
